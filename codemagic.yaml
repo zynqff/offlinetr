@@ -12,7 +12,7 @@ workflows:
         bundle_identifier: ${BUNDLE_ID}
 
       vars:
-        BUNDLE_ID: "REPLACE_WITH_YOUR_BUNDLE_ID"
+        BUNDLE_ID: "ТВОЙ_BUNDLE_ID"
         XCODE_PROJECT: "LocalTranslator.xcodeproj"
         XCODE_SCHEME: "LocalTranslator"
 
@@ -30,10 +30,8 @@ workflows:
       cache_paths:
         - $HOME/Library/Developer/Xcode/DerivedData
         - $HOME/Library/Caches/org.swift.swiftpm
-        - $HOME/Library/Developer/Xcode/Archives
 
-      scripts:
-
+    scripts:
       - name: Show build environment
         script: |
           set -e
@@ -63,5 +61,3 @@ workflows:
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
-
-    
