@@ -1,0 +1,95 @@
+workflows:
+  ios-release:
+    name: LocalTranslator iOS Release
+    max_build_duration: 120
+    instance_type: mac_mini_m2
+
+    environment:
+      xcode: latest
+
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: ${BUNDLE_ID}
+
+      vars:
+        BUNDLE_ID: "REPLACE_WITH_YOUR_BUNDLE_ID"
+        XCODE_PROJECT: "LocalTranslator.xcodeproj"
+        XCODE_SCHEME: "LocalTranslator"
+
+    triggering:
+      events:
+        - push
+        - tag
+      branch_patterns:
+        - pattern: main
+          include: true
+          source: true
+      cancel_previous_builds: true
+
+    cache:
+      cache_paths:
+        - $HOME/Library/Developer/Xcode/DerivedData
+        - $HOME/Library/Caches/org.swift.swiftpm
+        - $HOME/Library/Developer/Xcode/Archives
+
+    scripts:
+
+      - name: Show build environment
+        script: |
+          set -e
+          echo "=== Build environment ==="
+          xcodebuild -version
+          swift --version
+          echo "Project: $XCODE_PROJECT"
+          echo "Scheme: $XCODE_SCHEME"
+          echo "Bundle ID: $BUNDLE_ID"
+
+      - name: Resolve Swift Package dependencies
+        script: |
+          set -e
+
+          xcodebuild \
+            -project "$CM_BUILD_DIR/$XCODE_PROJECT" \
+            -scheme "$XCODE_SCHEME" \
+            -resolvePackageDependencies
+
+      - name: Verify Xcode project
+        script: |
+          set -e
+
+          test -d "$CM_BUILD_DIR/$XCODE_PROJECT"
+          echo "Xcode project found."
+
+          xcodebuild \
+            -project "$CM_BUILD_DIR/$XCODE_PROJECT" \
+            -scheme "$XCODE_SCHEME" \
+            -showBuildSettings > /tmp/localtranslator_build_settings.txt
+
+          echo "Xcode project configuration is valid."
+
+      - name: Apply Codemagic signing
+        script: |
+          set -e
+          xcode-project use-profiles
+
+      - name: Build signed IPA
+        script: |
+          set -e
+
+          xcode-project build-ipa \
+            --project "$CM_BUILD_DIR/$XCODE_PROJECT" \
+            --scheme "$XCODE_SCHEME"
+
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.app
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
+
+    publishing:
+      email:
+        recipients:
+          - $CM_COMMIT_AUTHOR_EMAIL
+        notify:
+          success: true
+          failure: true
