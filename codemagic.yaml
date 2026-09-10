@@ -1,12 +1,11 @@
 workflows:
-  ios-build:
-    name: LocalTranslator iOS Build
+  ios-unsigned-ipa:
+    name: LocalTranslator iOS unsigned IPA
     max_build_duration: 120
     instance_type: mac_mini_m2
 
     environment:
       xcode: latest
-
       vars:
         XCODE_PROJECT: "LocalTranslator.xcodeproj"
         XCODE_SCHEME: "LocalTranslator"
@@ -14,10 +13,12 @@ workflows:
     triggering:
       events:
         - push
+        - tag
       branch_patterns:
         - pattern: main
           include: true
           source: true
+      cancel_previous_builds: true
 
     cache:
       cache_paths:
@@ -25,32 +26,104 @@ workflows:
         - $HOME/Library/Caches/org.swift.swiftpm
 
     scripts:
-      - name: Show build environment
+      - name: Prepare Xcode project for CI
+        script: |
+          set -e
+
+          PBX="$CM_BUILD_DIR/LocalTranslator.xcodeproj/project.pbxproj"
+
+          # The generated project has source files in subdirectories,
+          # while its PBXFileReference entries point to the root.
+          python3 - "$PBX" <<'PY'
+          from pathlib import Path
+          import sys
+
+          p = Path(sys.argv[1])
+          s = p.read_text()
+
+          replacements = {
+              "path = Translation.swift;": "path = Models/Translation.swift;",
+              "path = AppConfig.swift;": "path = Services/AppConfig.swift;",
+              "path = HistoryStore.swift;": "path = Services/HistoryStore.swift;",
+              "path = ModelDownloadService.swift;": "path = Services/ModelDownloadService.swift;",
+              "path = ModelStore.swift;": "path = Services/ModelStore.swift;",
+              "path = TranslatorService.swift;": "path = Services/TranslatorService.swift;",
+              "path = OnboardingView.swift;": "path = Views/OnboardingView.swift;",
+              "path = SettingsView.swift;": "path = Views/SettingsView.swift;",
+              "path = TranslationView.swift;": "path = Views/TranslationView.swift;",
+          }
+
+          for old, new in replacements.items():
+              s = s.replace(old, new)
+
+          p.write_text(s)
+          PY
+
+          echo "Patched project:"
+          grep -E 'path = (Models|Services|Views)/' "$PBX" || true
+
+      - name: Verify iOS SDK
         script: |
           set -e
           xcodebuild -version
-          swift --version
+          xcodebuild -showsdks | grep -E 'iphoneos|iOS' || true
 
-      - name: Resolve dependencies
+      - name: Resolve Swift Package dependencies
         script: |
           set -e
           xcodebuild \
             -project "$CM_BUILD_DIR/$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
+            -sdk iphoneos \
             -resolvePackageDependencies
 
-      - name: Build unsigned archive
+      - name: Build unsigned iOS application
         script: |
           set -e
 
-          xcodebuild archive \
+          rm -rf "$CM_BUILD_DIR/build"
+          mkdir -p "$CM_BUILD_DIR/build"
+
+          xcodebuild \
             -project "$CM_BUILD_DIR/$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
             -configuration Release \
-            -archivePath "$CM_BUILD_DIR/build/LocalTranslator.xcarchive" \
+            -sdk iphoneos \
+            -derivedDataPath "$CM_BUILD_DIR/build/DerivedData" \
+            -destination 'generic/platform=iOS' \
+            IPHONEOS_DEPLOYMENT_TARGET=16.0 \
             CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO \
+            build
+
+      - name: Package unsigned IPA
+        script: |
+          set -e
+
+          APP_DIR="$CM_BUILD_DIR/build/DerivedData/Build/Products/Release-iphoneos/LocalTranslator.app"
+
+          if [ ! -d "$APP_DIR" ]; then
+            echo "ERROR: LocalTranslator.app was not produced."
+            find "$CM_BUILD_DIR/build/DerivedData/Build/Products" -maxdepth 3 -type d -name '*.app' -print || true
+            exit 1
+          fi
+
+          rm -rf "$CM_BUILD_DIR/build/Payload"
+          mkdir -p "$CM_BUILD_DIR/build/Payload"
+
+          cp -R "$APP_DIR" "$CM_BUILD_DIR/build/Payload/LocalTranslator.app"
+
+          cd "$CM_BUILD_DIR/build"
+          /usr/bin/zip -qry "LocalTranslator-unsigned.ipa" Payload
+
+          echo "IPA created:"
+          ls -lh "$CM_BUILD_DIR/build/LocalTranslator-unsigned.ipa"
 
     artifacts:
-      - build/LocalTranslator.xcarchive
+      - build/LocalTranslator-unsigned.ipa
+      - build/DerivedData/Build/Products/Release-iphoneos/LocalTranslator.app
       - /tmp/xcodebuild_logs/*.log
