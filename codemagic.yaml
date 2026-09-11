@@ -68,6 +68,7 @@ workflows:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
+            SWIFT_ENABLE_EXPLICIT_MODULES=NO \
             FRAMEWORK_SEARCH_PATHS="$ROOT/Vendor" \
             OTHER_LDFLAGS="-framework llama" \
             LD_RUNPATH_SEARCH_PATHS='$(inherited) @executable_path/Frameworks'
