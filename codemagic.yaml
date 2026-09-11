@@ -1,6 +1,56 @@
 workflows:
+
+  # --- существующий workflow: только собрать llama.xcframework отдельно ---
   build-llama-ios-only:
     name: Build llama.xcframework for iPhone and iPad only
+    max_build_duration: 61
+    instance_type: mac_mini_m2
+    environment:
+      xcode: latest
+    triggering:
+      events:
+        - push
+        - tag
+      branch_patterns:
+        - pattern: main
+          include: true
+          source: true
+      cancel_previous_builds: true
+    cache:
+      cache_paths:
+        - $HOME/.cache/llama-cpp
+        - $CM_BUILD_DIR/.build/llama.cpp
+    scripts:
+      - name: Build iOS-device llama XCFramework only
+        script: |
+          set -euo pipefail
+          ROOT="$CM_BUILD_DIR"
+          LLAMA_DIR="$ROOT/.build/llama.cpp"
+          COMMIT="b10507"
+          mkdir -p "$ROOT/.build"
+          if [ ! -d "$LLAMA_DIR/.git" ]; then
+            git clone --filter=blob:none https://github.com/ggml-org/llama.cpp.git "$LLAMA_DIR"
+          fi
+          cd "$LLAMA_DIR"
+          git fetch --depth 1 origin "$COMMIT"
+          git checkout --detach "$COMMIT"
+          chmod +x ./build-xcframework.sh
+          ./build-xcframework.sh ios-device
+          XCFW="$LLAMA_DIR/build-apple/llama.xcframework"
+          test -d "$XCFW"
+          rm -rf "$ROOT/build"
+          mkdir -p "$ROOT/build"
+          cp -R "$XCFW" "$ROOT/build/llama.xcframework"
+          cd "$ROOT/build"
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent \
+            "llama.xcframework" "llama-ios-device-xcframework.zip"
+    artifacts:
+      - build/llama-ios-device-xcframework.zip
+      - build/llama.xcframework
+
+  # --- новый workflow: собрать НЕподписанный .ipa приложения ---
+  build-app-unsigned-ipa:
+    name: Build LocalTranslator unsigned IPA
     max_build_duration: 60
     instance_type: mac_mini_m2
 
@@ -24,103 +74,78 @@ workflows:
 
     scripts:
 
-      - name: Build iOS-device llama XCFramework only
+      - name: Ensure llama.xcframework is present in Vendor/
         script: |
           set -euo pipefail
-
           ROOT="$CM_BUILD_DIR"
+          VENDOR_FW="$ROOT/Vendor/llama.xcframework"
+
+          if [ -d "$VENDOR_FW/ios-arm64/llama.framework" ]; then
+            echo "llama.xcframework уже лежит в Vendor/, пересборка не нужна."
+            exit 0
+          fi
+
+          echo "llama.xcframework не найден в Vendor/, собираю из исходников..."
           LLAMA_DIR="$ROOT/.build/llama.cpp"
           COMMIT="b10507"
-
           mkdir -p "$ROOT/.build"
-
           if [ ! -d "$LLAMA_DIR/.git" ]; then
-            echo "Cloning llama.cpp..."
             git clone --filter=blob:none https://github.com/ggml-org/llama.cpp.git "$LLAMA_DIR"
           fi
-
           cd "$LLAMA_DIR"
-
-          echo "Fetching llama.cpp commit $COMMIT..."
           git fetch --depth 1 origin "$COMMIT"
           git checkout --detach "$COMMIT"
-
-          echo "=================================================="
-          echo "Building ONLY:"
-          echo "  iOS Device / iPhoneOS / arm64"
-          echo "NOT building:"
-          echo "  iOS Simulator"
-          echo "  macOS"
-          echo "  visionOS"
-          echo "  tvOS"
-          echo "=================================================="
-
           chmod +x ./build-xcframework.sh
-
-          # IMPORTANT:
-          # The upstream script accepts explicit build names.
-          # Passing ios-device prevents its default "build everything"
-          # behavior and produces an XCFramework containing only the
-          # real iPhone/iPad device slice.
           ./build-xcframework.sh ios-device
 
-          XCFW="$LLAMA_DIR/build-apple/llama.xcframework"
+          rm -rf "$VENDOR_FW"
+          mkdir -p "$ROOT/Vendor"
+          cp -R "$LLAMA_DIR/build-apple/llama.xcframework" "$VENDOR_FW"
 
-          test -d "$XCFW"
-
-          echo "=== XCFramework contents ==="
-          find "$XCFW" -maxdepth 3 -type f -print
-
-          echo "=== XCFramework Info.plist ==="
-          /usr/libexec/PlistBuddy -c "Print" "$XCFW/Info.plist" || true
-
-          # Confirm that the produced binary is iPhoneOS arm64.
-          BIN="$XCFW/ios-arm64/llama.framework/llama"
-          test -f "$BIN"
-
-          echo "=== Binary architecture/platform ==="
-          file "$BIN"
-          xcrun vtool -show-build "$BIN" || true
-
-          # Copy the final framework into a clean artifact directory.
-          rm -rf "$ROOT/build"
-          mkdir -p "$ROOT/build"
-
-          cp -R "$XCFW" "$ROOT/build/llama.xcframework"
-
-          # A ZIP is much easier to download from Codemagic and then unpack
-          # into the GitHub repository's Vendor/ directory.
-          cd "$ROOT/build"
-          /usr/bin/ditto -c -k --sequesterRsrc --keepParent \
-            "llama.xcframework" \
-            "llama-ios-device-xcframework.zip"
-
-          echo "=== Final artifact ==="
-          ls -lh "$ROOT/build/llama-ios-device-xcframework.zip"
-
-      - name: Verify only iOS device slice exists
+      - name: Build LocalTranslator.app (без подписи)
         script: |
           set -euo pipefail
+          ROOT="$CM_BUILD_DIR"
+          DERIVED="$ROOT/DerivedData"
 
-          XCFW="$CM_BUILD_DIR/build/llama.xcframework"
+          xcodebuild build \
+            -project "$ROOT/LocalTranslator.xcodeproj" \
+            -target LocalTranslator \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath "$DERIVED" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            FRAMEWORK_SEARCH_PATHS="$ROOT/Vendor" \
+            OTHER_LDFLAGS="-framework llama" \
+            LD_RUNPATH_SEARCH_PATHS='$(inherited) @executable_path/Frameworks'
 
-          echo "Available XCFramework slices:"
-          find "$XCFW" -maxdepth 1 -mindepth 1 -type d -print | sort
+          APP_PATH="$DERIVED/Build/Products/Release-iphoneos/LocalTranslator.app"
+          test -d "$APP_PATH"
+          echo "APP_PATH=$APP_PATH" >> "$CM_ENV"
 
-          # Device-only build must not contain simulator/macOS/visionOS/tvOS
-          # slices.
-          if find "$XCFW" -maxdepth 1 -type d \
-              \( -name '*simulator*' -o -name 'macos*' -o -name 'xros*' -o -name 'tvos*' \) \
-              | grep -q .; then
-            echo "ERROR: unexpected non-iOS-device slice found."
-            exit 1
-          fi
+      - name: Упаковать unsigned .ipa
+        script: |
+          set -euo pipefail
+          ROOT="$CM_BUILD_DIR"
+          OUT="$ROOT/build"
 
-          test -d "$XCFW/ios-arm64"
-          test ! -d "$XCFW/ios-arm64_x86_64-simulator"
+          rm -rf "$OUT"
+          mkdir -p "$OUT/Payload"
 
-          echo "OK: llama.xcframework contains iOS device only."
+          cp -R "$APP_PATH" "$OUT/Payload/LocalTranslator.app"
+
+          # Embed-фазы в проекте нет — кладём фреймворк в бандл руками.
+          mkdir -p "$OUT/Payload/LocalTranslator.app/Frameworks"
+          cp -R "$ROOT/Vendor/llama.xcframework/ios-arm64/llama.framework" \
+                "$OUT/Payload/LocalTranslator.app/Frameworks/"
+
+          cd "$OUT"
+          zip -r -y "LocalTranslator-unsigned.ipa" Payload
+
+          echo "=== Готово ==="
+          ls -lh "$OUT/LocalTranslator-unsigned.ipa"
 
     artifacts:
-      - build/llama-ios-device-xcframework.zip
-      - build/llama.xcframework
+      - build/LocalTranslator-unsigned.ipa
