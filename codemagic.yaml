@@ -1,54 +1,5 @@
 workflows:
 
-  # --- существующий workflow: только собрать llama.xcframework отдельно ---
-  build-llama-ios-only:
-    name: Build llama.xcframework for iPhone and iPad only
-    max_build_duration: 61
-    instance_type: mac_mini_m2
-    environment:
-      xcode: latest
-    triggering:
-      events:
-        - push
-        - tag
-      branch_patterns:
-        - pattern: main
-          include: true
-          source: true
-      cancel_previous_builds: true
-    cache:
-      cache_paths:
-        - $HOME/.cache/llama-cpp
-        - $CM_BUILD_DIR/.build/llama.cpp
-    scripts:
-      - name: Build iOS-device llama XCFramework only
-        script: |
-          set -euo pipefail
-          ROOT="$CM_BUILD_DIR"
-          LLAMA_DIR="$ROOT/.build/llama.cpp"
-          COMMIT="b10507"
-          mkdir -p "$ROOT/.build"
-          if [ ! -d "$LLAMA_DIR/.git" ]; then
-            git clone --filter=blob:none https://github.com/ggml-org/llama.cpp.git "$LLAMA_DIR"
-          fi
-          cd "$LLAMA_DIR"
-          git fetch --depth 1 origin "$COMMIT"
-          git checkout --detach "$COMMIT"
-          chmod +x ./build-xcframework.sh
-          ./build-xcframework.sh ios-device
-          XCFW="$LLAMA_DIR/build-apple/llama.xcframework"
-          test -d "$XCFW"
-          rm -rf "$ROOT/build"
-          mkdir -p "$ROOT/build"
-          cp -R "$XCFW" "$ROOT/build/llama.xcframework"
-          cd "$ROOT/build"
-          /usr/bin/ditto -c -k --sequesterRsrc --keepParent \
-            "llama.xcframework" "llama-ios-device-xcframework.zip"
-    artifacts:
-      - build/llama-ios-device-xcframework.zip
-      - build/llama.xcframework
-
-  # --- новый workflow: собрать НЕподписанный .ipa приложения ---
   build-app-unsigned-ipa:
     name: Build LocalTranslator unsigned IPA
     max_build_duration: 60
