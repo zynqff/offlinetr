@@ -17,7 +17,23 @@
 		000000000000000020000008 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000010000008; };
 		000000000000000020000009 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000010000009; };
 		00000000000000002000000A /* TranslationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000001000000A; };
+		400000000000000000000001 /* llama.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 400000000000000000000000; };
+		400000000000000000000002 /* llama.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 400000000000000000000000; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		400000000000000000000003 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				400000000000000000000002 /* llama.xcframework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		000000000000000010000000 /* LocalTranslatorApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalTranslatorApp.swift; sourceTree = "<group>"; };
@@ -32,6 +48,7 @@
 		000000000000000010000009 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/SettingsView.swift; sourceTree = "<group>"; };
 		00000000000000001000000A /* TranslationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/TranslationView.swift; sourceTree = "<group>"; };
 		300000000000000000000001 /* LocalTranslator.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LocalTranslator.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		400000000000000000000000 /* llama.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = Vendor/llama.xcframework; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -39,6 +56,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				400000000000000000000001 /* llama.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -71,10 +89,19 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		300000000000000000000004 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				400000000000000000000000 /* llama.xcframework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		300000000000000000000010 /* Main Group */ = {
 			isa = PBXGroup;
 			children = (
 				300000000000000000000002 /* LocalTranslator */,
+				300000000000000000000004 /* Frameworks */,
 				300000000000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -88,6 +115,7 @@
 			buildPhases = (
 				300000000000000000000005 /* Sources */,
 				300000000000000000000006 /* Frameworks */,
+				400000000000000000000003 /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
@@ -154,6 +182,7 @@
 		300000000000000000000011 = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				SWIFT_VERSION = 5.9;
 			};
@@ -162,6 +191,7 @@
 		300000000000000000000012 = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				SWIFT_VERSION = 5.9;
 			};
@@ -170,6 +200,7 @@
 		300000000000000000000013 = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = "";
@@ -202,6 +233,7 @@
 		300000000000000000000014 = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = "";
