@@ -1,14 +1,11 @@
 workflows:
-  ios-unsigned-ipa:
-    name: LocalTranslator iOS unsigned IPA
-    max_build_duration: 120
+  build-llama-ios-only:
+    name: Build llama.xcframework for iPhone and iPad only
+    max_build_duration: 60
     instance_type: mac_mini_m2
 
     environment:
       xcode: latest
-      vars:
-        XCODE_PROJECT: "LocalTranslator.xcodeproj"
-        XCODE_SCHEME: "LocalTranslator"
 
     triggering:
       events:
@@ -22,91 +19,12 @@ workflows:
 
     cache:
       cache_paths:
-        - $HOME/Library/Developer/Xcode/DerivedData
-        - $HOME/Library/Caches/org.swift.swiftpm
+        - $HOME/.cache/llama-cpp
         - $CM_BUILD_DIR/.build/llama.cpp
 
     scripts:
 
-      # The supplied xcodeproj was generated without an explicit iOS
-      # platform declaration. This patch makes the target unambiguously iOS
-      # and also fixes the source-file paths used by the project.
-      - name: Patch Xcode project for iOS
-        script: |
-          set -euo pipefail
-
-          PBX="$CM_BUILD_DIR/LocalTranslator.xcodeproj/project.pbxproj"
-
-          python3 - "$PBX" <<'PY'
-          from pathlib import Path
-          import sys
-
-          p = Path(sys.argv[1])
-          s = p.read_text()
-
-          # Fix paths: the PBX group "LocalTranslator" already has
-          # path = LocalTranslator, so these paths are relative to that folder.
-          replacements = {
-              "path = Translation.swift;": "path = Models/Translation.swift;",
-              "path = AppConfig.swift;": "path = Services/AppConfig.swift;",
-              "path = HistoryStore.swift;": "path = Services/HistoryStore.swift;",
-              "path = ModelDownloadService.swift;": "path = Services/ModelDownloadService.swift;",
-              "path = ModelStore.swift;": "path = Services/ModelStore.swift;",
-              "path = TranslatorService.swift;": "path = Services/TranslatorService.swift;",
-              "path = OnboardingView.swift;": "path = Views/OnboardingView.swift;",
-              "path = SettingsView.swift;": "path = Views/SettingsView.swift;",
-              "path = TranslationView.swift;": "path = Views/TranslationView.swift;",
-          }
-
-          for old, new in replacements.items():
-              s = s.replace(old, new)
-
-          # Explicitly declare iOS for both project and target configurations.
-          # This is required because the original project has no SDKROOT /
-          # SUPPORTED_PLATFORMS entries and Xcode otherwise treats it as Mac-only.
-          old_debug_project = (
-              'buildSettings = {IPHONEOS_DEPLOYMENT_TARGET = 16.0; '
-              'SWIFT_VERSION = 5.9; }; name = Debug;'
-          )
-          new_debug_project = (
-              'buildSettings = {IPHONEOS_DEPLOYMENT_TARGET = 16.0; '
-              'SDKROOT = iphoneos; SUPPORTED_PLATFORMS = iphoneos; '
-              'SWIFT_VERSION = 5.9; }; name = Debug;'
-          )
-          old_release_project = (
-              'buildSettings = {IPHONEOS_DEPLOYMENT_TARGET = 16.0; '
-              'SWIFT_VERSION = 5.9; }; name = Release;'
-          )
-          new_release_project = (
-              'buildSettings = {IPHONEOS_DEPLOYMENT_TARGET = 16.0; '
-              'SDKROOT = iphoneos; SUPPORTED_PLATFORMS = iphoneos; '
-              'SWIFT_VERSION = 5.9; }; name = Release;'
-          )
-
-          # The same original text occurs in both project configurations,
-          # so replace the first occurrence as Debug and the second as Release.
-          if old_debug_project in s:
-              s = s.replace(old_debug_project, new_debug_project, 1)
-          if old_release_project in s:
-              s = s.replace(old_release_project, new_release_project, 1)
-
-          # Add iOS platform settings to every native-target configuration.
-          s = s.replace(
-              'buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;',
-              'buildSettings = {SDKROOT = iphoneos; SUPPORTED_PLATFORMS = iphoneos; '
-              'SUPPORTS_MACCATALYST = NO; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;'
-          )
-
-          p.write_text(s)
-          PY
-
-          echo "=== Target/platform settings ==="
-          grep -E 'SDKROOT|SUPPORTED_PLATFORMS|SUPPORTS_MACCATALYST|IPHONEOS_DEPLOYMENT_TARGET' "$PBX"
-
-      # Build the llama.cpp XCFramework required by:
-      #   import llama
-      # in LocalTranslator/Services/TranslatorService.swift
-      - name: Build llama.cpp XCFramework
+      - name: Build iOS-device llama XCFramework only
         script: |
           set -euo pipefail
 
@@ -117,186 +35,92 @@ workflows:
           mkdir -p "$ROOT/.build"
 
           if [ ! -d "$LLAMA_DIR/.git" ]; then
+            echo "Cloning llama.cpp..."
             git clone --filter=blob:none https://github.com/ggml-org/llama.cpp.git "$LLAMA_DIR"
           fi
 
           cd "$LLAMA_DIR"
+
+          echo "Fetching llama.cpp commit $COMMIT..."
           git fetch --depth 1 origin "$COMMIT"
           git checkout --detach "$COMMIT"
 
+          echo "=================================================="
+          echo "Building ONLY:"
+          echo "  iOS Device / iPhoneOS / arm64"
+          echo "NOT building:"
+          echo "  iOS Simulator"
+          echo "  macOS"
+          echo "  visionOS"
+          echo "  tvOS"
+          echo "=================================================="
+
           chmod +x ./build-xcframework.sh
-          ./build-xcframework.sh
 
-          test -d "$LLAMA_DIR/build-apple/llama.xcframework"
+          # IMPORTANT:
+          # The upstream script accepts explicit build names.
+          # Passing ios-device prevents its default "build everything"
+          # behavior and produces an XCFramework containing only the
+          # real iPhone/iPad device slice.
+          ./build-xcframework.sh ios-device
 
-          rm -rf "$ROOT/Vendor/llama.xcframework"
-          mkdir -p "$ROOT/Vendor"
-          cp -R "$LLAMA_DIR/build-apple/llama.xcframework" "$ROOT/Vendor/llama.xcframework"
+          XCFW="$LLAMA_DIR/build-apple/llama.xcframework"
 
-          echo "=== llama.xcframework ==="
-          find "$ROOT/Vendor/llama.xcframework" -maxdepth 2 -type f | head -40
+          test -d "$XCFW"
 
-      # Add Vendor/llama.xcframework to the Frameworks build phase.
-      # This is deliberately done in CI so the repository itself remains
-      # lightweight and does not need to contain the generated XCFramework.
-      - name: Link llama XCFramework
+          echo "=== XCFramework contents ==="
+          find "$XCFW" -maxdepth 3 -type f -print
+
+          echo "=== XCFramework Info.plist ==="
+          /usr/libexec/PlistBuddy -c "Print" "$XCFW/Info.plist" || true
+
+          # Confirm that the produced binary is iPhoneOS arm64.
+          BIN="$XCFW/ios-arm64/llama.framework/llama"
+          test -f "$BIN"
+
+          echo "=== Binary architecture/platform ==="
+          file "$BIN"
+          xcrun vtool -show-build "$BIN" || true
+
+          # Copy the final framework into a clean artifact directory.
+          rm -rf "$ROOT/build"
+          mkdir -p "$ROOT/build"
+
+          cp -R "$XCFW" "$ROOT/build/llama.xcframework"
+
+          # A ZIP is much easier to download from Codemagic and then unpack
+          # into the GitHub repository's Vendor/ directory.
+          cd "$ROOT/build"
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent \
+            "llama.xcframework" \
+            "llama-ios-device-xcframework.zip"
+
+          echo "=== Final artifact ==="
+          ls -lh "$ROOT/build/llama-ios-device-xcframework.zip"
+
+      - name: Verify only iOS device slice exists
         script: |
           set -euo pipefail
 
-          PBX="$CM_BUILD_DIR/LocalTranslator.xcodeproj/project.pbxproj"
+          XCFW="$CM_BUILD_DIR/build/llama.xcframework"
 
-          python3 - "$PBX" <<'PY'
-          from pathlib import Path
-          import sys
+          echo "Available XCFramework slices:"
+          find "$XCFW" -maxdepth 1 -mindepth 1 -type d -print | sort
 
-          p = Path(sys.argv[1])
-          s = p.read_text()
-
-          FILE_ID = "400000000000000000000001"
-          BUILD_ID = "400000000000000000000002"
-
-          # File reference.
-          marker = (
-              '300000000000000000000003 /* Products */ = {isa = PBXGroup;'
-          )
-          file_ref = (
-              f'\t{FILE_ID} /* llama.xcframework */ = {{isa = PBXFileReference; '
-              'explicitFileType = wrapper.xcframework; includeInIndex = 0; '
-              'path = Vendor/llama.xcframework; sourceTree = "<group>"; };\n'
-          )
-          if FILE_ID not in s:
-              idx = s.find(marker)
-              if idx == -1:
-                  raise SystemExit("Could not find Products group in pbxproj")
-              s = s[:idx] + file_ref + s[idx:]
-
-          # Build file.
-          build_file = (
-              f'\t{BUILD_ID} /* llama.xcframework in Frameworks */ = '
-              f'{{isa = PBXBuildFile; fileRef = {FILE_ID} /* llama.xcframework */; }};\n'
-          )
-          if BUILD_ID not in s:
-              marker = '\t300000000000000000000005 /* Sources */ = {isa = PBXSourcesBuildPhase;'
-              idx = s.find(marker)
-              if idx == -1:
-                  raise SystemExit("Could not find Sources phase in pbxproj")
-              s = s[:idx] + build_file + s[idx:]
-
-          # Add framework reference to the LocalTranslator group.
-          group_marker = (
-              '\t300000000000000000000002 /* LocalTranslator */ = {isa = PBXGroup; children = ('
-          )
-          if FILE_ID not in s[s.find(group_marker):s.find(group_marker) + 2000]:
-              idx = s.find(group_marker)
-              if idx == -1:
-                  raise SystemExit("Could not find LocalTranslator group")
-              insert_at = idx + len(group_marker)
-              s = s[:insert_at] + f'\n\t\t{FILE_ID} /* llama.xcframework */,' + s[insert_at:]
-
-          # Add framework to the Frameworks phase.
-          frameworks_marker = (
-              '\t300000000000000000000006 /* Frameworks */ = '
-              '{isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = ('
-          )
-          idx = s.find(frameworks_marker)
-          if idx == -1:
-              raise SystemExit("Could not find Frameworks build phase")
-          phase_end = s.find('); runOnlyForDeploymentPostprocessing = 0; };', idx)
-          if phase_end == -1:
-              raise SystemExit("Could not find end of Frameworks build phase")
-          phase_text = s[idx:phase_end]
-          if BUILD_ID not in phase_text:
-              insert_at = idx + len(frameworks_marker)
-              s = s[:insert_at] + f'\n\t\t{BUILD_ID} /* llama.xcframework in Frameworks */,' + s[insert_at:]
-
-          # Framework search path for the generated XCFramework.
-          needle = 'SWIFT_VERSION = 5.9;'
-          replacement = 'FRAMEWORK_SEARCH_PATHS = "$(SRCROOT)/Vendor"; ' + needle
-          if 'FRAMEWORK_SEARCH_PATHS = "$(SRCROOT)/Vendor";' not in s:
-              s = s.replace(needle, replacement)
-
-          p.write_text(s)
-          PY
-
-          echo "=== llama references in project ==="
-          grep -n "llama.xcframework\|FRAMEWORK_SEARCH_PATHS" "$PBX"
-
-          test -d "$ROOT/Vendor/llama.xcframework"
-          grep -q "path = Vendor/llama.xcframework;" "$PBX"
-
-      - name: Verify Xcode project is iOS
-        script: |
-          set -euo pipefail
-
-          xcodebuild -version
-          echo "=== iOS SDKs ==="
-          xcodebuild -showsdks | grep -E 'iphoneos|iOS'
-
-          echo "=== Project targets ==="
-          xcodebuild -project "$CM_BUILD_DIR/$XCODE_PROJECT" -list
-
-          echo "=== iOS build settings ==="
-          xcodebuild \
-            -project "$CM_BUILD_DIR/$XCODE_PROJECT" \
-            -scheme "$XCODE_SCHEME" \
-            -configuration Release \
-            -sdk iphoneos \
-            -showBuildSettings \
-            | grep -E '(^| )SDKROOT =|(^| )SUPPORTED_PLATFORMS =|(^| )PLATFORM_NAME =|(^| )PRODUCT_BUNDLE_IDENTIFIER =|(^| )IPHONEOS_DEPLOYMENT_TARGET =' \
-            || true
-
-      - name: Build unsigned iOS application
-        script: |
-          set -euo pipefail
-
-          rm -rf "$CM_BUILD_DIR/build"
-          mkdir -p "$CM_BUILD_DIR/build"
-
-          xcodebuild \
-            -project "$CM_BUILD_DIR/$XCODE_PROJECT" \
-            -scheme "$XCODE_SCHEME" \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath "$CM_BUILD_DIR/build/DerivedData" \
-            IPHONEOS_DEPLOYMENT_TARGET=16.0 \
-            SDKROOT=iphoneos \
-            SUPPORTED_PLATFORMS=iphoneos \
-            SUPPORTS_MACCATALYST=NO \
-            ARCHS=arm64 \
-            ONLY_ACTIVE_ARCH=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            DEVELOPMENT_TEAM="" \
-            build
-
-      - name: Package unsigned IPA
-        script: |
-          set -euo pipefail
-
-          APP_DIR="$CM_BUILD_DIR/build/DerivedData/Build/Products/Release-iphoneos/LocalTranslator.app"
-
-          if [ ! -d "$APP_DIR" ]; then
-            echo "ERROR: LocalTranslator.app was not produced."
-            echo "Produced applications:"
-            find "$CM_BUILD_DIR/build/DerivedData/Build/Products" \
-              -maxdepth 4 -type d -name '*.app' -print || true
+          # Device-only build must not contain simulator/macOS/visionOS/tvOS
+          # slices.
+          if find "$XCFW" -maxdepth 1 -type d \
+              \( -name '*simulator*' -o -name 'macos*' -o -name 'xros*' -o -name 'tvos*' \) \
+              | grep -q .; then
+            echo "ERROR: unexpected non-iOS-device slice found."
             exit 1
           fi
 
-          rm -rf "$CM_BUILD_DIR/build/Payload"
-          mkdir -p "$CM_BUILD_DIR/build/Payload"
+          test -d "$XCFW/ios-arm64"
+          test ! -d "$XCFW/ios-arm64_x86_64-simulator"
 
-          cp -R "$APP_DIR" "$CM_BUILD_DIR/build/Payload/LocalTranslator.app"
-
-          cd "$CM_BUILD_DIR/build"
-          /usr/bin/zip -qry "LocalTranslator-unsigned.ipa" Payload
-
-          echo "=== IPA ==="
-          ls -lh "$CM_BUILD_DIR/build/LocalTranslator-unsigned.ipa"
+          echo "OK: llama.xcframework contains iOS device only."
 
     artifacts:
-      - build/LocalTranslator-unsigned.ipa
-      - build/DerivedData/Build/Products/Release-iphoneos/LocalTranslator.app
-      - /tmp/xcodebuild_logs/*.log
+      - build/llama-ios-device-xcframework.zip
+      - build/llama.xcframework
