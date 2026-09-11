@@ -87,7 +87,7 @@ actor LlamaContext {
         llama_sampler_chain_add(sampling, llama_sampler_init_top_k(20))
         llama_sampler_chain_add(sampling, llama_sampler_init_top_p(0.6, 1))
         llama_sampler_chain_add(sampling, llama_sampler_init_temp(0.7))
-        llama_sampler_chain_add(sampling, llama_sampler_init_penalties(64, 1.05, 0.0, 0.0))
+        llama_sampler_chain_add(sampling, llama_sampler_init_penalties(Int32(64), Float(1.05), Float(0.0), Float(0.0)))
         llama_sampler_chain_add(sampling, llama_sampler_init_dist(UInt32.random(in: 0...UInt32.max)))
     }
 
