@@ -162,7 +162,7 @@ workflows:
           file_ref = (
               f'\t{FILE_ID} /* llama.xcframework */ = {{isa = PBXFileReference; '
               'explicitFileType = wrapper.xcframework; includeInIndex = 0; '
-              'path = llama.xcframework; sourceTree = "<group>"; };\n'
+              'path = Vendor/llama.xcframework; sourceTree = "<group>"; };\n'
           )
           if FILE_ID not in s:
               idx = s.find(marker)
@@ -220,6 +220,9 @@ workflows:
 
           echo "=== llama references in project ==="
           grep -n "llama.xcframework\|FRAMEWORK_SEARCH_PATHS" "$PBX"
+
+          test -d "$ROOT/Vendor/llama.xcframework"
+          grep -q "path = Vendor/llama.xcframework;" "$PBX"
 
       - name: Verify Xcode project is iOS
         script: |
