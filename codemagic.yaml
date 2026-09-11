@@ -58,6 +58,13 @@ workflows:
           set -euo pipefail
           ROOT="$CM_BUILD_DIR"
           BUILD_DIR="$ROOT/build/Release-iphoneos"
+          FW="$ROOT/Vendor/llama.xcframework/ios-arm64/llama.framework"
+          MODMAP="$FW/Modules/module.modulemap"
+
+          echo "=== module.modulemap ==="
+          cat "$MODMAP"
+          echo "=== Headers ==="
+          find "$FW/Headers" -maxdepth 1 -print
 
           xcodebuild build \
             -project "$ROOT/LocalTranslator.xcodeproj" \
@@ -70,13 +77,14 @@ workflows:
             CODE_SIGN_IDENTITY="" \
             SWIFT_ENABLE_EXPLICIT_MODULES=NO \
             FRAMEWORK_SEARCH_PATHS="$ROOT/Vendor" \
+            HEADER_SEARCH_PATHS="$FW/Headers" \
+            OTHER_SWIFT_FLAGS="-Xcc -fmodule-map-file=$MODMAP -Xcc -I$FW/Headers" \
             OTHER_LDFLAGS="-framework llama" \
             LD_RUNPATH_SEARCH_PATHS='$(inherited) @executable_path/Frameworks'
 
           APP_PATH="$BUILD_DIR/LocalTranslator.app"
           test -d "$APP_PATH"
           echo "APP_PATH=$APP_PATH" >> "$CM_ENV"
-
       - name: Упаковать unsigned .ipa
         script: |
           set -euo pipefail
