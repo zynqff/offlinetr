@@ -1,6 +1,6 @@
 workflows:
 
-  build-app-unsigned-ipa:
+   build-app-unsigned-ipa:
     name: Build LocalTranslator unsigned IPA
     max_build_duration: 60
     instance_type: mac_mini_m2
@@ -57,14 +57,14 @@ workflows:
         script: |
           set -euo pipefail
           ROOT="$CM_BUILD_DIR"
-          DERIVED="$ROOT/DerivedData"
+          BUILD_DIR="$ROOT/build/Release-iphoneos"
 
           xcodebuild build \
             -project "$ROOT/LocalTranslator.xcodeproj" \
             -target LocalTranslator \
             -configuration Release \
             -sdk iphoneos \
-            -derivedDataPath "$DERIVED" \
+            CONFIGURATION_BUILD_DIR="$BUILD_DIR" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
@@ -72,7 +72,7 @@ workflows:
             OTHER_LDFLAGS="-framework llama" \
             LD_RUNPATH_SEARCH_PATHS='$(inherited) @executable_path/Frameworks'
 
-          APP_PATH="$DERIVED/Build/Products/Release-iphoneos/LocalTranslator.app"
+          APP_PATH="$BUILD_DIR/LocalTranslator.app"
           test -d "$APP_PATH"
           echo "APP_PATH=$APP_PATH" >> "$CM_ENV"
 
@@ -82,12 +82,10 @@ workflows:
           ROOT="$CM_BUILD_DIR"
           OUT="$ROOT/build"
 
-          rm -rf "$OUT"
           mkdir -p "$OUT/Payload"
 
           cp -R "$APP_PATH" "$OUT/Payload/LocalTranslator.app"
 
-          # Embed-фазы в проекте нет — кладём фреймворк в бандл руками.
           mkdir -p "$OUT/Payload/LocalTranslator.app/Frameworks"
           cp -R "$ROOT/Vendor/llama.xcframework/ios-arm64/llama.framework" \
                 "$OUT/Payload/LocalTranslator.app/Frameworks/"
