@@ -87,7 +87,7 @@ actor LlamaContext {
         llama_sampler_chain_add(sampling, llama_sampler_init_top_k(20))
         llama_sampler_chain_add(sampling, llama_sampler_init_top_p(0.6, 1))
         llama_sampler_chain_add(sampling, llama_sampler_init_temp(0.7))
-        llama_sampler_chain_add(sampling, llama_sampler_init_penalties(Int32(64), Float(1.05), Float(0.0), Float(0.0)))
+        llama_sampler_chain_add(sampling, llama_sampler_init_penalties(Int32(64), Float(1.05), Float(0.0), Float(0.0), Float(0.0)))
         llama_sampler_chain_add(sampling, llama_sampler_init_dist(UInt32.random(in: 0...UInt32.max)))
     }
 
@@ -116,8 +116,8 @@ actor LlamaContext {
         let threads = max(1, min(6, ProcessInfo.processInfo.activeProcessorCount))
         var contextParams = llama_context_default_params()
         contextParams.n_ctx = 2048
-        contextParams.n_threads = UInt32(threads)
-        contextParams.n_threads_batch = UInt32(threads)
+        contextParams.n_threads = Int32(threads)
+        contextParams.n_threads_batch = Int32(threads)
         guard let context = llama_init_from_model(model, contextParams) else {
             llama_model_free(model)
             llama_backend_free()
