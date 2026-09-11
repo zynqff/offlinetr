@@ -24,7 +24,9 @@ struct TranslationView: View {
                             }
                         }.padding()
                     }
-                    .onChange(of: vm.history.count) { proxy.scrollTo("bottom", anchor: .bottom) }
+                    .onChange(of: vm.history.count) { _ in 
+                        proxy.scrollTo("bottom", anchor: .bottom) 
+                    }
                 }
 
                 VStack(spacing: 10) {
@@ -36,7 +38,9 @@ struct TranslationView: View {
                     TextField("Введите текст…", text: $vm.sourceText, axis: .vertical)
                         .textFieldStyle(.roundedBorder)
                         .focused($focused)
-                        .onChange(of: vm.sourceText) { vm.beginTyping() }
+                        .onChange(of: vm.sourceText) { _ in 
+                            vm.beginTyping() 
+                        }
                         .onSubmit { vm.finalize() }
                     HStack {
                         if !vm.preview.isEmpty { Text(vm.preview).frame(maxWidth: .infinity, alignment: .leading).foregroundStyle(.secondary) }
