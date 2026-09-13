@@ -27,38 +27,6 @@ struct TranslationView: View {
                             Color.clear.frame(height: 1).id("bottom")
                         }.padding()
                     }
-<<<<<<< HEAD
-                    .onChange(of: vm.history.count) { _ in 
-                        proxy.scrollTo("bottom", anchor: .bottom) 
-                    }
-                }
-
-                VStack(spacing: 10) {
-                    HStack {
-                        Picker("Источник", selection: $vm.sourceLanguage) { ForEach(supportedLanguages, id: \.self) { Text($0).tag($0) } }.pickerStyle(.menu)
-                        Button { vm.swapLanguages() } label: { Image(systemName: "arrow.up.arrow.down") }.buttonStyle(.plain)
-                        Picker("Перевод", selection: $vm.targetLanguage) { ForEach(supportedLanguages, id: \.self) { Text($0).tag($0) } }.pickerStyle(.menu)
-                    }
-                    TextField("Введите текст…", text: $vm.sourceText, axis: .vertical)
-                        .textFieldStyle(.roundedBorder)
-                        .focused($focused)
-                        .onChange(of: vm.sourceText) { _ in 
-                            vm.beginTyping() 
-                        }
-                        .onSubmit { vm.finalize() }
-                    HStack {
-                        if !vm.preview.isEmpty { Text(vm.preview).frame(maxWidth: .infinity, alignment: .leading).foregroundStyle(.secondary) }
-                        Button { UIPasteboard.general.string = vm.preview } label: { Image(systemName: "doc.on.doc") }.disabled(vm.preview.isEmpty)
-                        Button("Далее") { vm.finalize() }.buttonStyle(.borderedProminent)
-                    }
-                }.padding()
-            }
-            .navigationTitle("Переводчик")
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("Очистить") { vm.clearScreen() } }
-                ToolbarItem(placement: .topBarTrailing) { Button { showSettings = true } label: { Image(systemName: "gearshape") } }
-                ToolbarItem(placement: .principal) { HStack(spacing: 5) { Circle().fill(vm.modelState == .loaded ? .green : .secondary).frame(width: 8, height: 8); Text(stateText) } }
-=======
                     // Прокрутка истории вверх скрывает клавиатуру; чтобы показать её
                     // снова — нужно нажать на поле ввода.
                     .scrollDismissesKeyboard(.immediately)
@@ -68,7 +36,6 @@ struct TranslationView: View {
                 }
 
                 composer
->>>>>>> 700a3b5 (feat(ios): add llama.framework to local translator app)
             }
             .toolbar(.hidden, for: .navigationBar)
             .sheet(isPresented: $showSettings) { SettingsView().environmentObject(vm) }
