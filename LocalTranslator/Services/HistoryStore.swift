@@ -44,7 +44,7 @@ final class HistoryStore {
         try? container.viewContext.save()
     }
 
-    /// Полностью очищает сохранённую историю переводов.
+    /// Полностью очищает сохранённую историю переводов
     func clearAll() {
         let context = container.viewContext
         let fetchRequest = NSFetchRequest<NSManagedObject>(entityName: "HistoryEntry")
