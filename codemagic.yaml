@@ -1,6 +1,5 @@
 workflows:
-
-   build-app-unsigned-ipa:
+  build-app-unsigned-ipa:
     name: Build LocalTranslator unsigned IPA
     max_build_duration: 60
     instance_type: mac_mini_m2
@@ -18,16 +17,11 @@ workflows:
           source: true
       cancel_previous_builds: true
 
-    cache:
-      cache_paths:
-        - $HOME/.cache/llama-cpp
-        - $CM_BUILD_DIR/.build/llama.cpp
-
     scripts:
-
       - name: Ensure llama.xcframework is present in Vendor/
         script: |
           set -euo pipefail
+
           ROOT="$CM_BUILD_DIR"
           VENDOR_FW="$ROOT/Vendor/llama.xcframework"
 
@@ -36,35 +30,65 @@ workflows:
             exit 0
           fi
 
-          echo "llama.xcframework не найден в Vendor/, собираю из исходников..."
-          LLAMA_DIR="$ROOT/.build/llama.cpp"
-          COMMIT="b10507"
-          mkdir -p "$ROOT/.build"
-          if [ ! -d "$LLAMA_DIR/.git" ]; then
-            git clone --filter=blob:none https://github.com/ggml-org/llama.cpp.git "$LLAMA_DIR"
-          fi
-          cd "$LLAMA_DIR"
-          git fetch --depth 1 origin "$COMMIT"
-          git checkout --detach "$COMMIT"
-          chmod +x ./build-xcframework.sh
-          ./build-xcframework.sh ios-device
+          echo "ОШИБКА: Vendor/llama.xcframework не найден."
+          echo "Положите готовый iOS-device XCFramework в:"
+          echo "  $VENDOR_FW"
+          echo "Сборка llama.cpp в этом workflow отключена."
+          exit 1
 
-          rm -rf "$VENDOR_FW"
-          mkdir -p "$ROOT/Vendor"
-          cp -R "$LLAMA_DIR/build-apple/llama.xcframework" "$VENDOR_FW"
+      - name: Verify llama.xcframework
+        script: |
+          set -euo pipefail
+
+          ROOT="$CM_BUILD_DIR"
+          XCFW="$ROOT/Vendor/llama.xcframework"
+          FW="$XCFW/ios-arm64/llama.framework"
+
+          test -d "$FW"
+          test -f "$FW/llama"
+          test -f "$FW/Modules/module.modulemap"
+
+          echo "=== XCFramework slices ==="
+          find "$XCFW" -maxdepth 1 -mindepth 1 -type d -print | sort
+
+          echo "=== Framework ==="
+          find "$FW" -maxdepth 2 -type f -print | sort
+
+          echo "=== Binary ==="
+          file "$FW/llama"
+
+          if find "$XCFW" -maxdepth 1 -type d \
+              \( -name '*simulator*' -o -name 'macos*' -o -name 'xros*' -o -name 'tvos*' \) \
+              | grep -q .; then
+            echo "ОШИБКА: найдена лишняя платформа в llama.xcframework."
+            exit 1
+          fi
+
+          echo "OK: используется только iOS Device / arm64."
 
       - name: Build LocalTranslator.app (без подписи)
         script: |
           set -euo pipefail
+
           ROOT="$CM_BUILD_DIR"
           BUILD_DIR="$ROOT/build/Release-iphoneos"
-          FW="$ROOT/Vendor/llama.xcframework/ios-arm64/llama.framework"
+          XCFW="$ROOT/Vendor/llama.xcframework"
+          FW="$XCFW/ios-arm64/llama.framework"
           MODMAP="$FW/Modules/module.modulemap"
+
+          rm -rf "$BUILD_DIR"
+          mkdir -p "$BUILD_DIR"
 
           echo "=== module.modulemap ==="
           cat "$MODMAP"
+
           echo "=== Headers ==="
-          find "$FW/Headers" -maxdepth 1 -print
+          find "$FW/Headers" -maxdepth 1 -type f -print
+
+          # ВАЖНО:
+          # linker должен видеть каталог, где физически находится llama.framework.
+          # Он вложен в Vendor/llama.xcframework/ios-arm64, а не непосредственно в Vendor.
+          FRAMEWORK_PATHS="$ROOT/Vendor:$ROOT/Vendor/llama.xcframework/ios-arm64"
 
           xcodebuild build \
             -project "$ROOT/LocalTranslator.xcodeproj" \
@@ -76,7 +100,7 @@ workflows:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             SWIFT_ENABLE_EXPLICIT_MODULES=NO \
-            FRAMEWORK_SEARCH_PATHS="$ROOT/Vendor" \
+            FRAMEWORK_SEARCH_PATHS="$FRAMEWORK_PATHS" \
             HEADER_SEARCH_PATHS="$FW/Headers" \
             OTHER_SWIFT_FLAGS="-Xcc -fmodule-map-file=$MODMAP -Xcc -I$FW/Headers" \
             OTHER_LDFLAGS="-framework llama" \
@@ -85,21 +109,55 @@ workflows:
           APP_PATH="$BUILD_DIR/LocalTranslator.app"
           test -d "$APP_PATH"
           echo "APP_PATH=$APP_PATH" >> "$CM_ENV"
-      - name: Упаковать unsigned .ipa
+
+      - name: Embed llama.framework into app bundle
         script: |
           set -euo pipefail
+
+          ROOT="$CM_BUILD_DIR"
+          FW="$ROOT/Vendor/llama.xcframework/ios-arm64/llama.framework"
+
+          test -d "$APP_PATH"
+          test -d "$FW"
+
+          mkdir -p "$APP_PATH/Frameworks"
+          rm -rf "$APP_PATH/Frameworks/llama.framework"
+          cp -R "$FW" "$APP_PATH/Frameworks/llama.framework"
+
+          echo "=== Embedded frameworks ==="
+          find "$APP_PATH/Frameworks" -maxdepth 2 -print
+
+      - name: Verify unsigned app
+        script: |
+          set -euo pipefail
+
+          test -d "$APP_PATH"
+          test -d "$APP_PATH/Frameworks/llama.framework"
+          test -f "$APP_PATH/Frameworks/llama.framework/llama"
+
+          echo "=== App ==="
+          ls -ld "$APP_PATH"
+
+          echo "=== llama.framework ==="
+          ls -lh "$APP_PATH/Frameworks/llama.framework/llama"
+
+          echo "=== Code signature status ==="
+          codesign -dvv "$APP_PATH" 2>&1 || true
+
+      - name: Package unsigned IPA
+        script: |
+          set -euo pipefail
+
           ROOT="$CM_BUILD_DIR"
           OUT="$ROOT/build"
 
+          rm -rf "$OUT/Payload"
           mkdir -p "$OUT/Payload"
 
           cp -R "$APP_PATH" "$OUT/Payload/LocalTranslator.app"
 
-          mkdir -p "$OUT/Payload/LocalTranslator.app/Frameworks"
-          cp -R "$ROOT/Vendor/llama.xcframework/ios-arm64/llama.framework" \
-                "$OUT/Payload/LocalTranslator.app/Frameworks/"
-
           cd "$OUT"
+          rm -f "LocalTranslator-unsigned.ipa"
           zip -r -y "LocalTranslator-unsigned.ipa" Payload
 
           echo "=== Готово ==="
