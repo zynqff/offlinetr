@@ -1,6 +1,14 @@
 import Foundation
 import SwiftUI
 
+enum UpdateCheckStatus {
+    case idle
+    case checking
+    case upToDate
+    case available(RemoteAppConfig)
+    case failed(String)
+}
+
 @MainActor
 final class TranslatorViewModel: ObservableObject {
     @Published var sourceText = ""
@@ -9,10 +17,24 @@ final class TranslatorViewModel: ObservableObject {
     @Published var targetLanguage = "Russian"
     @Published var history: [TranslationItem] = []
     @Published var modelState: ModelState = .unloaded
-    @Published var isModelDownloading = false
-    @Published var downloadProgress = 0.0
     @Published var errorMessage: String?
     @Published var config: RemoteAppConfig?
+
+    /// Установлена ли на устройстве модель, соответствующая текущему конфигу.
+    @Published var isModelInstalled = false
+
+    // MARK: Загрузка / установка модели
+    @Published var isModelDownloading = false
+
+    // MARK: Проверка обновлений (Настройки)
+    @Published var updateCheckStatus: UpdateCheckStatus = .idle
+    @Published var updateInstalledSuccess = false
+
+    // MARK: Удаление модели (Настройки)
+    @Published var showDeleteConfirmation = false
+    @Published var isDeletingModel = false
+    @Published var deleteProgress = 0.0
+    @Published var modelDeletedSuccess = false
 
     let configService = ConfigService()
     let modelStore = ModelStore()
@@ -40,22 +62,33 @@ final class TranslatorViewModel: ObservableObject {
         await syncState()
     }
 
+    /// Скачивает и устанавливает модель, только если установленной версии ещё нет.
+    /// Используется при обычном использовании переводчика (первый запуск / первый ввод текста).
     func ensureModel() async throws {
         guard let config else { throw ConfigError.invalidConfig }
-        let local = await modelStore.localURL(fileName: config.model.fileName)
-        if !(await modelStore.exists(fileName: config.model.fileName)) {
-            isModelDownloading = true
-            do {
-                let downloaded = try await downloader.download(url: config.model.url, fileName: config.model.fileName)
-                let committed = try await modelStore.commit(downloadedFile: downloaded, fileName: config.model.fileName)
-                try await modelStore.verify(url: committed, expectedSize: config.model.sizeBytes, expectedSHA256: config.model.sha256)
-            } catch {
-                isModelDownloading = false
-                throw error
-            }
-            isModelDownloading = false
+        if !(await modelStore.isModelInstalled(matching: config.model)) {
+            try await downloadAndInstall(model: config.model)
         }
-        modelURL = local
+        modelURL = await modelStore.localURL(fileName: config.model.fileName)
+        await syncState()
+    }
+
+    /// Скачивает файл модели, ПРОВЕРЯЕТ его целостность и только после успешной проверки
+    /// заменяет им предыдущую модель. Если что-то пошло не так — старая модель остаётся нетронутой.
+    private func downloadAndInstall(model: RemoteAppConfig.ModelInfo) async throws {
+        isModelDownloading = true
+        defer { isModelDownloading = false }
+        let previousFileName = await modelStore.installedMetadata()?.fileName
+        let downloaded = try await downloader.download(url: model.url, fileName: model.fileName)
+        do {
+            try await modelStore.verify(url: downloaded, expectedSize: model.sizeBytes, expectedSHA256: model.sha256)
+        } catch {
+            try? FileManager.default.removeItem(at: downloaded)
+            throw error
+        }
+        // Новый файл скачан и прошёл проверку целостности — теперь можно безопасно
+        // заменить старую модель (её удаление происходит внутри commit).
+        _ = try await modelStore.commit(downloadedFile: downloaded, model: model, previousFileName: previousFileName)
     }
 
     func beginTyping() {
@@ -106,13 +139,80 @@ final class TranslatorViewModel: ObservableObject {
         schedulePreview()
     }
 
+    /// Стирает набранный, ещё не подтверждённый текст (крестик), не трогая историю.
+    func clearInput() {
+        previewTask?.cancel()
+        sourceText = ""
+        preview = ""
+    }
+
     func clearScreen() { history.removeAll() }
 
-    func deleteModel() async {
-        guard let config else { return }
-        try? await modelStore.remove(fileName: config.model.fileName)
-        await translator.unloadModel()
-        await syncState()
+    /// Пользователь подтвердил очистку истории переводов в диалоге.
+    func clearHistoryConfirmed() {
+        history.removeAll()
+        HistoryStore.shared.clearAll()
+    }
+
+    // MARK: - Проверка обновлений
+
+    /// Явная проверка обновлений из Настроек: "Поиск обновления…" -> "последняя версия" / "найдено обновление".
+    func checkForUpdates() async {
+        updateCheckStatus = .checking
+        do {
+            let remote = try await configService.load()
+            config = remote
+            let installed = await modelStore.installedMetadata()
+            if let installed, installed.id == remote.model.id, installed.version == remote.model.version {
+                updateCheckStatus = .upToDate
+            } else {
+                updateCheckStatus = .available(remote)
+            }
+        } catch {
+            updateCheckStatus = .failed(error.localizedDescription)
+        }
+    }
+
+    /// Пользователь подтвердил загрузку найденного обновления.
+    func installAvailableUpdate() async {
+        guard case .available(let remote) = updateCheckStatus else { return }
+        updateCheckStatus = .idle
+        do {
+            try await downloadAndInstall(model: remote.model)
+            modelURL = await modelStore.localURL(fileName: remote.model.fileName)
+            // Старая модель уже выгружена из памяти — при следующем переводе будет загружена новая.
+            await translator.unloadModel()
+            await syncState()
+            updateInstalledSuccess = true
+        } catch {
+            updateCheckStatus = .failed(error.localizedDescription)
+        }
+    }
+
+    // MARK: - Удаление модели
+
+    func requestDeleteModel() {
+        showDeleteConfirmation = true
+    }
+
+    /// Пользователь подтвердил удаление в диалоге. Показываем прогресс 0-100%, затем сообщение об успехе.
+    func confirmDeleteModel() {
+        guard !isDeletingModel else { return }
+        Task {
+            isDeletingModel = true
+            deleteProgress = 0
+            await translator.unloadModel()
+            let fileName = await modelStore.installedMetadata()?.fileName
+            for step in 1...10 {
+                try? await Task.sleep(for: .milliseconds(70))
+                deleteProgress = Double(step) / 10.0
+            }
+            if let fileName { try? await modelStore.remove(fileName: fileName) }
+            await modelStore.removeMetadata()
+            await syncState()
+            isDeletingModel = false
+            modelDeletedSuccess = true
+        }
     }
 
     func appDidEnterBackground() {
@@ -131,5 +231,8 @@ final class TranslatorViewModel: ObservableObject {
         }
     }
 
-    func syncState() async { modelState = await translator.currentState() }
+    func syncState() async {
+        modelState = await translator.currentState()
+        if let config { isModelInstalled = await modelStore.isModelInstalled(matching: config.model) }
+    }
 }

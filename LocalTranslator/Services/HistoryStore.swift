@@ -43,4 +43,14 @@ final class HistoryStore {
         object.setValue(item.date, forKey: "timestamp")
         try? container.viewContext.save()
     }
+
+    /// Полностью очищает сохранённую историю переводов.
+    func clearAll() {
+        let context = container.viewContext
+        let fetchRequest = NSFetchRequest<NSManagedObject>(entityName: "HistoryEntry")
+        if let objects = try? context.fetch(fetchRequest) {
+            objects.forEach { context.delete($0) }
+            try? context.save()
+        }
+    }
 }
