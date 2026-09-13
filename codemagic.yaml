@@ -88,7 +88,7 @@ workflows:
           # ВАЖНО:
           # linker должен видеть каталог, где физически находится llama.framework.
           # Он вложен в Vendor/llama.xcframework/ios-arm64, а не непосредственно в Vendor.
-          FRAMEWORK_PATHS="$ROOT/Vendor:$ROOT/Vendor/llama.xcframework/ios-arm64"
+          FRAMEWORK_PATHS="$ROOT/Vendor $ROOT/Vendor/llama.xcframework/ios-arm64"
 
           xcodebuild build \
             -project "$ROOT/LocalTranslator.xcodeproj" \
