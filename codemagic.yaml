@@ -23,16 +23,20 @@ workflows:
           set -euo pipefail
 
           ROOT="$CM_BUILD_DIR"
-          VENDOR_FW="$ROOT/Vendor/llama.xcframework"
+          XCFW="$ROOT/Vendor/llama.xcframework"
 
-          if [ -d "$VENDOR_FW/ios-arm64/llama.framework" ]; then
-            echo "llama.xcframework уже лежит в Vendor/, пересборка не нужна."
+          if [ -f "$XCFW/ios-arm64/libllama_combined.a" ] && [ -f "$XCFW/ios-arm64/Headers/llama.h" ]; then
+            echo "llama.xcframework (статическая сборка) уже лежит в Vendor/, пересборка не нужна."
             exit 0
           fi
 
-          echo "ОШИБКА: Vendor/llama.xcframework не найден."
+          echo "ОШИБКА: Vendor/llama.xcframework (статический, libllama_combined.a) не найден."
           echo "Положите готовый iOS-device XCFramework в:"
-          echo "  $VENDOR_FW"
+          echo "  $XCFW"
+          echo "Ожидается структура:"
+          echo "  $XCFW/ios-arm64/libllama_combined.a"
+          echo "  $XCFW/ios-arm64/Headers/*.h"
+          echo "  $XCFW/ios-arm64/Headers/module.modulemap"
           echo "Сборка llama.cpp в этом workflow отключена."
           exit 1
 
@@ -42,20 +46,25 @@ workflows:
 
           ROOT="$CM_BUILD_DIR"
           XCFW="$ROOT/Vendor/llama.xcframework"
-          FW="$XCFW/ios-arm64/llama.framework"
+          LIB="$XCFW/ios-arm64/libllama_combined.a"
+          HDRS="$XCFW/ios-arm64/Headers"
 
-          test -d "$FW"
-          test -f "$FW/llama"
-          test -f "$FW/Modules/module.modulemap"
+          test -f "$LIB"
+          test -f "$HDRS/llama.h"
+          test -f "$HDRS/module.modulemap"
 
           echo "=== XCFramework slices ==="
           find "$XCFW" -maxdepth 1 -mindepth 1 -type d -print | sort
 
-          echo "=== Framework ==="
-          find "$FW" -maxdepth 2 -type f -print | sort
+          echo "=== Headers ==="
+          find "$HDRS" -maxdepth 1 -type f -print | sort
+
+          echo "=== module.modulemap ==="
+          cat "$HDRS/module.modulemap"
 
           echo "=== Binary ==="
-          file "$FW/llama"
+          file "$LIB"
+          ls -lh "$LIB"
 
           if find "$XCFW" -maxdepth 1 -type d \
               \( -name '*simulator*' -o -name 'macos*' -o -name 'xros*' -o -name 'tvos*' \) \
@@ -64,7 +73,7 @@ workflows:
             exit 1
           fi
 
-          echo "OK: используется только iOS Device / arm64."
+          echo "OK: используется только iOS Device / arm64, статическая линковка."
 
       - name: Build LocalTranslator.app (без подписи)
         script: |
@@ -73,22 +82,12 @@ workflows:
           ROOT="$CM_BUILD_DIR"
           BUILD_DIR="$ROOT/build/Release-iphoneos"
           XCFW="$ROOT/Vendor/llama.xcframework"
-          FW="$XCFW/ios-arm64/llama.framework"
-          MODMAP="$FW/Modules/module.modulemap"
+          LIB_DIR="$XCFW/ios-arm64"
+          HDRS="$LIB_DIR/Headers"
+          MODMAP="$HDRS/module.modulemap"
 
           rm -rf "$BUILD_DIR"
           mkdir -p "$BUILD_DIR"
-
-          echo "=== module.modulemap ==="
-          cat "$MODMAP"
-
-          echo "=== Headers ==="
-          find "$FW/Headers" -maxdepth 1 -type f -print
-
-          # ВАЖНО:
-          # linker должен видеть каталог, где физически находится llama.framework.
-          # Он вложен в Vendor/llama.xcframework/ios-arm64, а не непосредственно в Vendor.
-          FRAMEWORK_PATHS="$ROOT/Vendor $ROOT/Vendor/llama.xcframework/ios-arm64"
 
           xcodebuild build \
             -project "$ROOT/LocalTranslator.xcodeproj" \
@@ -100,46 +99,29 @@ workflows:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             SWIFT_ENABLE_EXPLICIT_MODULES=NO \
-            FRAMEWORK_SEARCH_PATHS="$FRAMEWORK_PATHS" \
-            HEADER_SEARCH_PATHS="$FW/Headers" \
-            OTHER_SWIFT_FLAGS="-Xcc -fmodule-map-file=$MODMAP -Xcc -I$FW/Headers" \
-            OTHER_LDFLAGS="-framework llama" \
-            LD_RUNPATH_SEARCH_PATHS='$(inherited) @executable_path/Frameworks'
+            HEADER_SEARCH_PATHS="$HDRS" \
+            LIBRARY_SEARCH_PATHS="$LIB_DIR" \
+            OTHER_SWIFT_FLAGS="-Xcc -fmodule-map-file=$MODMAP -Xcc -I$HDRS" \
+            OTHER_LDFLAGS="-lllama_combined -lc++"
 
           APP_PATH="$BUILD_DIR/LocalTranslator.app"
           test -d "$APP_PATH"
           echo "APP_PATH=$APP_PATH" >> "$CM_ENV"
-
-      - name: Embed llama.framework into app bundle
-        script: |
-          set -euo pipefail
-
-          ROOT="$CM_BUILD_DIR"
-          FW="$ROOT/Vendor/llama.xcframework/ios-arm64/llama.framework"
-
-          test -d "$APP_PATH"
-          test -d "$FW"
-
-          mkdir -p "$APP_PATH/Frameworks"
-          rm -rf "$APP_PATH/Frameworks/llama.framework"
-          cp -R "$FW" "$APP_PATH/Frameworks/llama.framework"
-
-          echo "=== Embedded frameworks ==="
-          find "$APP_PATH/Frameworks" -maxdepth 2 -print
 
       - name: Verify unsigned app
         script: |
           set -euo pipefail
 
           test -d "$APP_PATH"
-          test -d "$APP_PATH/Frameworks/llama.framework"
-          test -f "$APP_PATH/Frameworks/llama.framework/llama"
 
           echo "=== App ==="
           ls -ld "$APP_PATH"
 
-          echo "=== llama.framework ==="
-          ls -lh "$APP_PATH/Frameworks/llama.framework/llama"
+          echo "=== Проверка, что бинарник содержит символы llama (статически слинкован) ==="
+          nm "$APP_PATH/LocalTranslator" 2>/dev/null | grep -c "llama_model_load_from_file" || {
+            echo "ОШИБКА: символы llama не найдены в бинарнике — статическая линковка не сработала."
+            exit 1
+          }
 
           echo "=== Code signature status ==="
           codesign -dvv "$APP_PATH" 2>&1 || true
