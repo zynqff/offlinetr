@@ -1,5 +1,12 @@
 import Foundation
 import llama
+import os
+
+// Через os.Logger, а не print()/NSLog() — так эти сообщения гарантированно попадают
+// в единый системный лог (видно в Console.app / idevicesyslog), в отличие от обычного
+// print() или fprintf(stderr, ...) внутри llama.cpp, которые в собранном не под Xcode
+// приложении в системный лог не долетают вообще.
+private let llamaLogger = Logger(subsystem: "com.example.LocalTranslator", category: "llama")
 
 enum ModelState: Equatable, Sendable {
     case unloaded, loading, loaded, translating, unloading
@@ -37,12 +44,18 @@ actor LlamaTranslatorService: TranslatorService {
     func loadModel(path: URL) async throws {
         guard context == nil else { return }
         state = .loading
+        llamaLogger.notice("loadModel: старт, путь = \(path.path, privacy: .public)")
+        let exists = FileManager.default.fileExists(atPath: path.path)
+        let size = (try? FileManager.default.attributesOfItem(atPath: path.path)[.size] as? Int64) ?? nil
+        llamaLogger.notice("loadModel: файл существует = \(exists), размер на диске = \(size ?? -1, privacy: .public) байт")
         do {
             context = try await LlamaContext.create(path: path.path)
             state = .loaded
+            llamaLogger.notice("loadModel: модель и контекст успешно созданы")
         } catch {
             context = nil
             state = .unloaded
+            llamaLogger.error("loadModel: ошибка создания контекста: \(String(describing: error), privacy: .public)")
             throw TranslatorError.contextCreationFailed
         }
     }
@@ -116,11 +129,14 @@ actor LlamaContext {
         #else
         modelParams.n_gpu_layers = Int32.max
         #endif
+        llamaLogger.notice("LlamaContext.create: вызываю llama_model_load_from_file (n_gpu_layers=\(modelParams.n_gpu_layers, privacy: .public))")
 
         guard let model = llama_model_load_from_file(path, modelParams) else {
+            llamaLogger.error("LlamaContext.create: llama_model_load_from_file вернул nil — файл не распознан как валидный gguf/архитектура/квантование не поддерживаются текущей сборкой llama.xcframework")
             llama_backend_free()
             throw TranslatorError.contextCreationFailed
         }
+        llamaLogger.notice("LlamaContext.create: модель загружена, создаю контекст")
 
         let threads = max(1, min(6, ProcessInfo.processInfo.activeProcessorCount))
         var contextParams = llama_context_default_params()
@@ -128,10 +144,12 @@ actor LlamaContext {
         contextParams.n_threads = Int32(threads)
         contextParams.n_threads_batch = Int32(threads)
         guard let context = llama_init_from_model(model, contextParams) else {
+            llamaLogger.error("LlamaContext.create: llama_init_from_model вернул nil (n_ctx=2048, threads=\(threads, privacy: .public)) — вероятно не хватает памяти под контекст, либо параметры контекста несовместимы с моделью")
             llama_model_free(model)
             llama_backend_free()
             throw TranslatorError.contextCreationFailed
         }
+        llamaLogger.notice("LlamaContext.create: контекст создан успешно")
         return LlamaContext(model: model, context: context)
     }
 
