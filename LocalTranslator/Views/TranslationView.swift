@@ -11,8 +11,6 @@ struct TranslationView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                header
-
                 statusBanner
 
                 ScrollViewReader { proxy in
@@ -27,17 +25,32 @@ struct TranslationView: View {
                             Color.clear.frame(height: 1).id("bottom")
                         }.padding()
                     }
-                    // Прокрутка истории вверх скрывает клавиатуру; чтобы показать её
-                    // снова — нужно нажать на поле ввода.
+                    // Прокрутка истории вверх скрывает клавиатуру; чтобы показать
+                    // её снова — нужно нажать на поле ввода.
                     .scrollDismissesKeyboard(.immediately)
                     .onChange(of: vm.history.count) { _ in
                         withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
                     }
                 }
 
-                composer
+                translateCard
             }
-            .toolbar(.hidden, for: .navigationBar)
+            .navigationTitle("Перевод")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Очистить") { showClearConfirm = true }
+                        .disabled(vm.history.isEmpty)
+                }
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button { showSettings = true } label: { Image(systemName: "gearshape") }
+                    if focused {
+                        Button { finalizeOrDismiss() } label: { Image(systemName: "checkmark.circle.fill") }
+                            .tint(Color.accentColor)
+                    }
+                }
+            }
+            .animation(.easeInOut(duration: 0.2), value: focused)
             .sheet(isPresented: $showSettings) { SettingsView().environmentObject(vm) }
         }
         .onChange(of: scenePhase) { phase in if phase == .background { vm.appDidEnterBackground() } }
@@ -58,43 +71,6 @@ struct TranslationView: View {
         } message: {
             Text("История переводов успешно очищена.")
         }
-    }
-
-    // MARK: - Верхняя панель (заменяет системный navigationBar)
-    // По умолчанию справа только кнопка настроек. Как только пользователь
-    // нажимает на поле ввода, кнопка настроек «сдвигается» влево, освобождая
-    // место для галочки подтверждения (как и кнопка «Далее», она завершает перевод).
-
-    private var header: some View {
-        HStack {
-            Button("Очистить") { showClearConfirm = true }
-                .foregroundStyle(vm.history.isEmpty ? Color.secondary : Color.primary)
-                .disabled(vm.history.isEmpty)
-
-            Spacer()
-
-            Text("Перевод").font(.headline)
-
-            Spacer()
-
-            HStack(spacing: 18) {
-                Button { showSettings = true } label: {
-                    Image(systemName: "gearshape")
-                }
-
-                if focused {
-                    Button { finalizeAndKeepEditing() } label: {
-                        Image(systemName: "checkmark.circle.fill")
-                    }
-                    .foregroundStyle(Color.accentColor)
-                    .disabled(vm.preview.isEmpty)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
-                }
-            }
-            .animation(.easeInOut(duration: 0.2), value: focused)
-        }
-        .padding(.horizontal)
-        .padding(.vertical, 10)
     }
 
     // MARK: - Баннер состояния модели (всегда виден, не требует скролла)
@@ -132,17 +108,17 @@ struct TranslationView: View {
         }
     }
 
-    // MARK: - Поле ввода (композер)
-    // Пока перевод не подтверждён (кнопка «Далее», галочка сверху или Enter),
-    // текст можно редактировать и полностью стереть крестиком. После
-    // подтверждения поле очищается и фокус автоматически возвращается в него,
-    // чтобы можно было сразу продолжать печатать следующий перевод, а
-    // предыдущий остаётся в истории выше — там доступно только копирование.
+    // MARK: - Карточка перевода (композер)
+    // Единая карточка: исходный текст сверху, кнопка обмена языками на разделительной
+    // линии, перевод снизу. Пока перевод не подтверждён (кнопка «Далее», галочка
+    // сверху или Enter), текст можно редактировать и полностью стереть крестиком.
+    // После подтверждения карточка очищается, фокус возвращается в неё же —
+    // чтобы сразу продолжать печатать следующий перевод, а предыдущий остаётся
+    // в истории выше, где доступно только копирование.
 
-    private var composer: some View {
-        VStack(spacing: 10) {
-            // Исходный текст
-            VStack(alignment: .leading, spacing: 6) {
+    private var translateCard: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Picker("", selection: $vm.sourceLanguage) {
                         ForEach(supportedLanguages, id: \.self) { lang in
@@ -164,59 +140,75 @@ struct TranslationView: View {
                         .buttonStyle(.plain)
                     }
                 }
+
                 TextField("Введите текст", text: $vm.sourceText, axis: .vertical)
-                    .font(.title3)
+                    .font(.system(size: 24, weight: .bold))
                     .focused($focused)
                     .lineLimit(1...6)
                     .onChange(of: vm.sourceText) { _ in
                         vm.beginTyping()
                     }
-                    .onSubmit { finalizeAndKeepEditing() }
+                    .onSubmit { finalizeOrDismiss() }
             }
-            .padding()
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
+            .padding(16)
 
-            Button { vm.swapLanguages() } label: {
-                Image(systemName: "arrow.up.arrow.down.circle.fill").font(.title2)
+            ZStack {
+                Divider()
+                Button { vm.swapLanguages() } label: {
+                    Image(systemName: "arrow.up.arrow.down")
+                        .font(.footnote.weight(.semibold))
+                        .frame(width: 34, height: 34)
+                        .background(.regularMaterial, in: Circle())
+                        .foregroundStyle(Color.accentColor)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
+            .padding(.horizontal, 16)
 
-            // Перевод (превью)
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 10) {
                 Text(languageAutonym(vm.targetLanguage))
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Color.accentColor)
 
                 Text(vm.preview.isEmpty ? "Enter text" : vm.preview)
-                    .font(.title3)
+                    .font(.system(size: 24, weight: .bold))
                     .foregroundStyle(vm.preview.isEmpty ? Color.secondary : Color.accentColor)
-
-                if !vm.preview.isEmpty {
-                    HStack {
-                        Spacer()
-                        Button { UIPasteboard.general.string = vm.preview } label: {
-                            Image(systemName: "doc.on.doc")
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
             }
-            .padding()
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
 
-            HStack {
-                Spacer()
-                Button("Далее") { finalizeAndKeepEditing() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(vm.preview.isEmpty)
+            if !vm.preview.isEmpty {
+                Divider().padding(.horizontal, 16)
+                HStack {
+                    Button { UIPasteboard.general.string = vm.preview } label: {
+                        Image(systemName: "doc.on.doc")
+                    }
+                    .buttonStyle(.plain)
+
+                    Spacer()
+
+                    Button("Далее") { finalizeOrDismiss() }
+                        .buttonStyle(.borderedProminent)
+                }
+                .padding(16)
             }
         }
-        .padding()
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 24))
+        .padding(.horizontal)
+        .padding(.bottom, 12)
     }
 
-    private func finalizeAndKeepEditing() {
-        vm.finalize()
-        focused = true
+    /// Действие для галочки сверху, кнопки «Далее» и Enter в поле ввода.
+    /// Если перевод ещё не готов (нечего подтверждать) — просто убирает клавиатуру.
+    /// Если готов — подтверждает перевод (уходит в историю) и сразу возвращает
+    /// фокус в очищенное поле для следующего перевода.
+    private func finalizeOrDismiss() {
+        if vm.preview.isEmpty {
+            focused = false
+        } else {
+            vm.finalize()
+            focused = true
+        }
     }
 
     private var emptyState: some View {
@@ -233,11 +225,23 @@ struct TranslationView: View {
 private struct TranslationCard: View {
     let item: TranslationItem
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(item.source).font(.body)
+        VStack(alignment: .leading, spacing: 10) {
+            Text(languageAutonym(item.sourceLang)).font(.caption).foregroundStyle(.secondary)
+            Text(item.source).font(.system(size: 19, weight: .semibold))
+
             Divider()
-            HStack { Text(item.translated).font(.body); Spacer(); Button { UIPasteboard.general.string = item.translated } label: { Image(systemName: "doc.on.doc") } }
-            Text("\(languageAutonym(item.sourceLang)) → \(languageAutonym(item.targetLang))").font(.caption).foregroundStyle(.secondary)
-        }.padding().background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
+
+            HStack {
+                Text(languageAutonym(item.targetLang)).font(.caption).foregroundStyle(Color.accentColor)
+                Spacer()
+                Button { UIPasteboard.general.string = item.translated } label: {
+                    Image(systemName: "doc.on.doc")
+                }
+                .buttonStyle(.plain)
+            }
+            Text(item.translated).font(.system(size: 19, weight: .semibold)).foregroundStyle(Color.accentColor)
+        }
+        .padding()
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
     }
 }
