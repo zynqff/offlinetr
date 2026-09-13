@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import Combine
 
 enum UpdateCheckStatus {
     case idle
@@ -44,10 +45,21 @@ final class TranslatorViewModel: ObservableObject {
     private var idleTask: Task<Void, Never>?
     private var previewTask: Task<Void, Never>?
     private var modelURL: URL?
+    private var cancellables = Set<AnyCancellable>()
     @AppStorage("idleTimeout") private var idleTimeout = 180
 
     init(translator: LlamaTranslatorService = LlamaTranslatorService()) {
         self.translator = translator
+        // `downloader` — отдельный ObservableObject, и его собственные @Published
+        // свойства (progress и т.д.) сами по себе НЕ вызывают перерисовку экранов,
+        // которые подписаны только на `TranslatorViewModel` (через @EnvironmentObject).
+        // Поэтому явно прокидываем его изменения наружу — иначе прогресс-бар
+        // загрузки модели не обновлялся в реальном времени, а «подтягивался»
+        // только когда экран перерисовывался по другой причине (например, при
+        // выходе из Настроек и повторном входе).
+        downloader.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
         Task { await refreshConfig() }
     }
 
