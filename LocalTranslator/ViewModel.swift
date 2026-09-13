@@ -1,6 +1,9 @@
 import Foundation
 import SwiftUI
 import Combine
+import os
+
+private let llamaDiagnosticsLogger = Logger(subsystem: "com.example.LocalTranslator", category: "llama")
 
 enum UpdateCheckStatus {
     case idle
@@ -82,6 +85,7 @@ final class TranslatorViewModel: ObservableObject {
             try await downloadAndInstall(model: config.model)
         }
         modelURL = await modelStore.localURL(fileName: config.model.fileName)
+        llamaDiagnosticsLogger.notice("ensureModel: id=\(config.model.id, privacy: .public) version=\(config.model.version, privacy: .public) file=\(config.model.fileName, privacy: .public) итоговый путь=\(self.modelURL?.path ?? "nil", privacy: .public)")
         await syncState()
     }
 
