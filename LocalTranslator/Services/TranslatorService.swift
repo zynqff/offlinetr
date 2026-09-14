@@ -186,7 +186,30 @@ actor LlamaContext {
     }
 
     func generate(prompt: String, maxTokens: Int32, onToken: @escaping @Sendable (String) -> Void) throws -> String {
-        let tokens = tokenize(prompt, addBOS: true)
+        // Важно: чистим KV-кэш перед КАЖДЫМ новым переводом. Раньше context/кэш
+        // переиспользовался между вызовами, а позиции токенов снова нумеровались с
+        // нуля — старые записи кэша от предыдущего перевода оставались и мешались
+        // с новыми, из-за чего 2-й и последующие переводы съезжали в мусор.
+        llama_memory_clear(llama_get_memory(context), true)
+        nCur = 0
+
+        // Модель — инструктивная (chat), обучена на формате с служебными токенами
+        // диалога (<|startoftext|>...<|extra_0|>), а не на голом тексте. Оборачиваем
+        // промпт через её собственный chat_template (из метаданных gguf), с фолбэком
+        // на голый текст, если шаблон модели не распознан движком.
+        // llama_chat_apply_template знает только заранее зашитый список шаблонов
+        // (не парсит произвольный jinja из gguf), так что для совсем новой
+        // архитектуры hunyuan-dense он вполне может не сработать — тогда
+        // templatedPrompt == nil и используется прежний голый текст.
+        let templatedPrompt = applyChatTemplate(userContent: prompt)
+        let formattedPrompt = templatedPrompt ?? prompt
+        // Если шаблон применился, он обычно уже сам вставляет <|startoftext|> —
+        // тогда свой BOS добавлять не нужно, иначе получим дубль.
+        let shouldAddBOS = (templatedPrompt == nil)
+        llamaLogger.notice("generate: chat_template \(templatedPrompt == nil ? "НЕ распознан движком, использую голый текст" : "применён", privacy: .public)")
+        // parse_special: true — обязательно, иначе служебные токены типа <|extra_0|>
+        // будут разрезаны на мусорные подтокены вместо одного управляющего токена.
+        let tokens = tokenize(formattedPrompt, addBOS: shouldAddBOS, parseSpecial: true)
 
         // Динамический лимит: сколько токенов реально осталось в контексте после промпта.
         // Раньше здесь была жёсткая проверка "tokens.count + maxTokens <= n_ctx", которая
@@ -238,13 +261,42 @@ actor LlamaContext {
         return output
     }
 
-    private func tokenize(_ text: String, addBOS: Bool) -> [llama_token] {
+    private func tokenize(_ text: String, addBOS: Bool, parseSpecial: Bool = false) -> [llama_token] {
         let count = text.utf8.count
         let capacity = count + (addBOS ? 1 : 0) + 1
         let ptr = UnsafeMutablePointer<llama_token>.allocate(capacity: capacity)
         defer { ptr.deallocate() }
-        let n = llama_tokenize(vocab, text, Int32(count), ptr, Int32(capacity), addBOS, false)
+        let n = llama_tokenize(vocab, text, Int32(count), ptr, Int32(capacity), addBOS, parseSpecial)
         return (0..<max(0, Int(n))).map { ptr[$0] }
+    }
+
+    /// Пытается обернуть пользовательский промпт через chat_template самой модели
+    /// (llama_chat_apply_template читает встроенный в gguf jinja-шаблон/список
+    /// известных шаблонов). Если движок llama.cpp не распознал шаблон архитектуры
+    /// hunyuan-dense — возвращает nil, и вызывающий код использует голый текст
+    /// как раньше (не хуже статус-кво).
+    private func applyChatTemplate(userContent: String) -> String? {
+        userContent.withCString { contentPtr -> String? in
+            var message = llama_chat_message(role: strdup("user"), content: contentPtr)
+            defer { free(UnsafeMutablePointer(mutating: message.role)) }
+
+            var bufSize: Int32 = Int32(userContent.utf8.count * 2 + 64)
+            var buffer = [CChar](repeating: 0, count: Int(bufSize))
+            var n = withUnsafeMutablePointer(to: &message) { msgPtr in
+                llama_chat_apply_template(nil, msgPtr, 1, true, &buffer, bufSize)
+            }
+            guard n > 0 else { return nil } // шаблон не распознан
+
+            if n > bufSize {
+                bufSize = n
+                buffer = [CChar](repeating: 0, count: Int(bufSize))
+                n = withUnsafeMutablePointer(to: &message) { msgPtr in
+                    llama_chat_apply_template(nil, msgPtr, 1, true, &buffer, bufSize)
+                }
+                guard n > 0 else { return nil }
+            }
+            return String(cString: buffer)
+        }
     }
 
     private func tokenToPiece(_ token: llama_token) -> [CChar] {
