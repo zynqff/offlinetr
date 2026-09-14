@@ -48,7 +48,9 @@ enum TranslatorError: LocalizedError {
 
 protocol TranslatorService: Sendable {
     func loadModel(path: URL) async throws
-    func translate(text: String, sourceLang: String, targetLang: String) async throws -> String
+    /// onToken вызывается по мере генерации каждого нового фрагмента текста (потоковый вывод).
+    /// Возвращает финальный, уже полностью собранный и обрезанный от пробелов результат.
+    func translate(text: String, sourceLang: String, targetLang: String, onToken: @escaping @Sendable (String) -> Void) async throws -> String
     func unloadModel() async
     func currentState() async -> ModelState
 }
@@ -78,15 +80,21 @@ actor LlamaTranslatorService: TranslatorService {
         }
     }
 
-    func translate(text: String, sourceLang: String, targetLang: String) async throws -> String {
+    func translate(text: String, sourceLang: String, targetLang: String, onToken: @escaping @Sendable (String) -> Void) async throws -> String {
         guard let context else { throw TranslatorError.modelUnavailable }
         state = .translating
         defer { if self.context != nil { self.state = .loaded } }
 
         let prompt = "Translate the following segment into \(targetLang), without additional explanation: \(text)"
         do {
-            let result = try await context.generate(prompt: prompt, maxTokens: 4096)
+            // maxTokens здесь — это "запрошенный потолок", а не гарантия: generate() сам
+            // урежет его под реально доступный остаток контекста (n_ctx - размер промпта),
+            // так что жёстко попадать в TranslatorError.inputTooLong он будет, только если
+            // сам промпт уже не помещается в контекст целиком.
+            let result = try await context.generate(prompt: prompt, maxTokens: 2048, onToken: onToken)
             return result.trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch let error as TranslatorError {
+            throw error
         } catch {
             throw TranslatorError.inferenceFailed
         }
@@ -172,11 +180,17 @@ actor LlamaContext {
         return LlamaContext(model: model, context: context)
     }
 
-    func generate(prompt: String, maxTokens: Int32) throws -> String {
+    func generate(prompt: String, maxTokens: Int32, onToken: @escaping @Sendable (String) -> Void) throws -> String {
         let tokens = tokenize(prompt, addBOS: true)
-        guard tokens.count + Int(maxTokens) <= Int(llama_n_ctx(context)) else {
-            throw TranslatorError.inputTooLong
-        }
+
+        // Динамический лимит: сколько токенов реально осталось в контексте после промпта.
+        // Раньше здесь была жёсткая проверка "tokens.count + maxTokens <= n_ctx", которая
+        // при фиксированном большом maxTokens (например 4096 при n_ctx=2048) падала ВСЕГДА,
+        // независимо от длины входного текста. Теперь maxTokens — это лишь верхняя граница,
+        // фактически используемая величина не может превысить свободное место в контексте.
+        let available = Int(llama_n_ctx(context)) - tokens.count
+        guard available > 0 else { throw TranslatorError.inputTooLong }
+        let effectiveMaxTokens = min(Int(maxTokens), available)
 
         batch.n_tokens = 0
         for (i, token) in tokens.enumerated() {
@@ -193,7 +207,7 @@ actor LlamaContext {
         invalidUTF8.removeAll(keepingCapacity: true)
 
         var output = ""
-        for _ in 0..<maxTokens {
+        for _ in 0..<effectiveMaxTokens {
             let token = llama_sampler_sample(sampling, context, batch.n_tokens - 1)
             if llama_vocab_is_eog(vocab, token) { break }
             let chars = tokenToPiece(token)
@@ -201,6 +215,9 @@ actor LlamaContext {
             if let str = String(validatingUTF8: invalidUTF8 + [0]) {
                 output += str
                 invalidUTF8.removeAll(keepingCapacity: true)
+                // Отдаём наружу только что декодированный кусок текста — это и даёт
+                // потоковый вывод в UI, а не ожидание полного результата в конце.
+                onToken(str)
             }
 
             batch.n_tokens = 0
