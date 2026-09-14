@@ -151,11 +151,16 @@ actor LlamaContext {
         llama_log_set(llamaLogCallback, nil)
         llama_backend_init()
         var modelParams = llama_model_default_params()
-        #if targetEnvironment(simulator)
+        // ВРЕМЕННО для диагностики: принудительно 0 GPU-слоёв даже на реальном
+        // устройстве (было Int32.max), чтобы проверить гипотезу "Metal-офлоад
+        // новой архитектуры hy_v3 даёт мусор на выходе, а чистый CPU — нет".
+        // После проверки строку ниже нужно вернуть на исходную (см. комментарий).
         modelParams.n_gpu_layers = 0
-        #else
-        modelParams.n_gpu_layers = Int32.max
-        #endif
+        // #if targetEnvironment(simulator)
+        // modelParams.n_gpu_layers = 0
+        // #else
+        // modelParams.n_gpu_layers = Int32.max   // <- вернуть после диагностики
+        // #endif
         llamaLogger.notice("LlamaContext.create: вызываю llama_model_load_from_file (n_gpu_layers=\(modelParams.n_gpu_layers, privacy: .public))")
 
         guard let model = llama_model_load_from_file(path, modelParams) else {
