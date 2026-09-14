@@ -8,6 +8,24 @@ import os
 // приложении в системный лог не долетают вообще.
 private let llamaLogger = Logger(subsystem: "com.example.LocalTranslator", category: "llama")
 
+// llama.cpp/ggml по умолчанию пишет свои внутренние сообщения (в т.ч. настоящую причину
+// сбоя загрузки — неподдерживаемая архитектура/квантование/битая gguf) через fprintf(stderr,...),
+// которые в собранном приложении в системный лог НЕ попадают. llama_log_set перехватывает
+// эти сообщения и переправляет в os.Logger, чтобы их было видно в Console.app / idevicesyslog.
+private func llamaLogCallback(level: ggml_log_level, text: UnsafePointer<CChar>?, userData: UnsafeMutableRawPointer?) {
+    guard let text else { return }
+    let message = String(cString: text).trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !message.isEmpty else { return }
+    switch level {
+    case GGML_LOG_LEVEL_ERROR:
+        llamaLogger.error("llama.cpp: \(message, privacy: .public)")
+    case GGML_LOG_LEVEL_WARN:
+        llamaLogger.warning("llama.cpp: \(message, privacy: .public)")
+    default:
+        llamaLogger.notice("llama.cpp: \(message, privacy: .public)")
+    }
+}
+
 enum ModelState: Equatable, Sendable {
     case unloaded, loading, loaded, translating, unloading
 }
@@ -122,6 +140,7 @@ actor LlamaContext {
     }
 
     static func create(path: String) throws -> LlamaContext {
+        llama_log_set(llamaLogCallback, nil)
         llama_backend_init()
         var modelParams = llama_model_default_params()
         #if targetEnvironment(simulator)
