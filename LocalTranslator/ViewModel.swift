@@ -48,6 +48,11 @@ final class TranslatorViewModel: ObservableObject {
     private var idleTask: Task<Void, Never>?
     private var previewTask: Task<Void, Never>?
     private var modelURL: URL?
+    // Увеличивается на каждый новый запуск schedulePreview(). Токены из "устаревшего"
+    // (уже перезапущенного) прогона generate() по этому счётчику отбрасываются —
+    // это защищает от перемешивания текста двух параллельных потоковых генераций,
+    // так как сам generate() кооперативную отмену не поддерживает.
+    private var previewGeneration = 0
     private var cancellables = Set<AnyCancellable>()
     @AppStorage("idleTimeout") private var idleTimeout = 180
 
@@ -123,7 +128,14 @@ final class TranslatorViewModel: ObservableObject {
 
     func schedulePreview() {
         previewTask?.cancel()
-        guard !sourceText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { preview = ""; return }
+        guard !sourceText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            previewGeneration += 1 // инвалидируем ещё не завершившийся прогон
+            preview = ""
+            return
+        }
+        previewGeneration += 1
+        let myGeneration = previewGeneration
+        preview = ""
         previewTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
             guard !Task.isCancelled, let self else { return }
@@ -132,8 +144,23 @@ final class TranslatorViewModel: ObservableObject {
                     try await self.ensureModel()
                     if let modelURL = self.modelURL { try await self.translator.loadModel(path: modelURL) }
                 }
-                let result = try await self.translator.translate(text: self.sourceText, sourceLang: self.sourceLanguage, targetLang: self.targetLanguage)
-                await MainActor.run { self.preview = result }
+                let result = try await self.translator.translate(
+                    text: self.sourceText,
+                    sourceLang: self.sourceLanguage,
+                    targetLang: self.targetLanguage,
+                    onToken: { [weak self] piece in
+                        Task { @MainActor in
+                            guard let self, self.previewGeneration == myGeneration else { return }
+                            self.preview += piece
+                        }
+                    }
+                )
+                // Финальное присваивание — подчищает пробелы по краям и служит
+                // единственным источником истины, если этот прогон всё ещё актуален.
+                await MainActor.run {
+                    guard self.previewGeneration == myGeneration else { return }
+                    self.preview = result
+                }
             } catch { }
         }
     }
@@ -145,6 +172,8 @@ final class TranslatorViewModel: ObservableObject {
         let item = TranslationItem(source: source, translated: translated, sourceLang: sourceLanguage, targetLang: targetLanguage, date: .now)
         history.append(item)
         HistoryStore.shared.add(item)
+        previewTask?.cancel()
+        previewGeneration += 1
         sourceText = ""
         preview = ""
         scheduleIdleUnload()
@@ -158,6 +187,7 @@ final class TranslatorViewModel: ObservableObject {
     /// Стирает набранный, ещё не подтверждённый текст (крестик), не трогая историю.
     func clearInput() {
         previewTask?.cancel()
+        previewGeneration += 1
         sourceText = ""
         preview = ""
     }
