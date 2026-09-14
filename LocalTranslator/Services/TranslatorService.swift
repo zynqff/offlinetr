@@ -121,22 +121,10 @@ actor LlamaContext {
         self.context = context
         self.vocab = llama_model_get_vocab(model)
         self.batch = llama_batch_init(512, 0, 1)
-        let params = llama_sampler_chain_default_params()
-        self.sampling = llama_sampler_chain_init(params)
-        llama_sampler_chain_add(sampling, llama_sampler_init_top_k(20))
-        llama_sampler_chain_add(sampling, llama_sampler_init_top_p(0.6, 1))
-        llama_sampler_chain_add(sampling, llama_sampler_init_temp(0.7))
-        llama_sampler_chain_add(
-            sampling, 
-            llama_sampler_init_penalties(
-                Int32(64),      // n_vocab (или размер вашего словаря/пенальти)
-                Int32(64),      // penalty_last_n
-                Float(1.05),    // penalty_repeat
-                Float(0.0),     // penalty_freq
-                Float(0.0)      // penalty_present
-            )
-        )
-        llama_sampler_chain_add(sampling, llama_sampler_init_dist(UInt32.random(in: 0...UInt32.max)))
+        // Диагностика HY-MT2: сначала используем полностью детерминированный
+        // greedy sampler, чтобы исключить влияние top-k/top-p/temperature,
+        // penalties и случайного seed на качество первых токенов.
+        self.sampling = llama_sampler_init_greedy()
     }
 
     deinit {
@@ -193,22 +181,19 @@ actor LlamaContext {
         llama_memory_clear(llama_get_memory(context), true)
         nCur = 0
 
-        // Модель — инструктивная (chat), обучена на формате с служебными токенами
-        // диалога (<|startoftext|>...<|extra_0|>), а не на голом тексте. Оборачиваем
-        // промпт через её собственный chat_template (из метаданных gguf), с фолбэком
-        // на голый текст, если шаблон модели не распознан движком.
-        // llama_chat_apply_template знает только заранее зашитый список шаблонов
-        // (не парсит произвольный jinja из gguf), так что для совсем новой
-        // архитектуры hunyuan-dense он вполне может не сработать — тогда
-        // templatedPrompt == nil и используется прежний голый текст.
-        let templatedPrompt = applyChatTemplate(userContent: prompt)
-        let formattedPrompt = templatedPrompt ?? prompt
-        // Если шаблон применился, он обычно уже сам вставляет <|startoftext|> —
-        // тогда свой BOS добавлять не нужно, иначе получим дубль.
-        let shouldAddBOS = (templatedPrompt == nil)
-        llamaLogger.notice("generate: chat_template \(templatedPrompt == nil ? "НЕ распознан движком, использую голый текст" : "применён", privacy: .public)")
-        // parse_special: true — обязательно, иначе служебные токены типа <|extra_0|>
-        // будут разрезаны на мусорные подтокены вместо одного управляющего токена.
+        // HY-MT2 — chat-модель. Используем именно Hunyuan chat template и
+        // НЕ делаем fallback на raw prompt: raw prompt имеет другой формат и
+        // может приводить к полностью неправильной генерации.
+        guard let formattedPrompt = applyChatTemplate(userContent: prompt) else {
+            llamaLogger.error("generate: не удалось применить chat template hunyuan-dense")
+            throw TranslatorError.inferenceFailed
+        }
+        // Шаблон уже содержит <｜hy_begin▁of▁sentence｜> (BOS), поэтому
+        // автоматически добавлять BOS через llama_tokenize нельзя — это даст дубль.
+        let shouldAddBOS = false
+        llamaLogger.notice("generate: chat_template hunyuan-dense применён, prompt=\(formattedPrompt, privacy: .public)")
+        // parse_special: true — обязательно, чтобы специальные токены HY-MT2
+        // оставались управляющими токенами, а не разбивались на обычные подтокены.
         let tokens = tokenize(formattedPrompt, addBOS: shouldAddBOS, parseSpecial: true)
 
         // Динамический лимит: сколько токенов реально осталось в контексте после промпта.
@@ -270,33 +255,15 @@ actor LlamaContext {
         return (0..<max(0, Int(n))).map { ptr[$0] }
     }
 
-    /// Пытается обернуть пользовательский промпт через chat_template самой модели
-    /// (llama_chat_apply_template читает встроенный в gguf jinja-шаблон/список
-    /// известных шаблонов). Если движок llama.cpp не распознал шаблон архитектуры
-    /// hunyuan-dense — возвращает nil, и вызывающий код использует голый текст
-    /// как раньше (не хуже статус-кво).
+    /// Формирует точный chat prompt из metadata GGUF HY-MT2.
+    /// Не используем llama_chat_apply_template(): llama.cpp в этой версии
+    /// поддерживает только заранее встроенный список шаблонов и не исполняет
+    /// произвольный Jinja template из GGUF. Для HY-MT2 безопаснее повторить
+    /// его template буквально.
     private func applyChatTemplate(userContent: String) -> String? {
-        userContent.withCString { contentPtr -> String? in
-            var message = llama_chat_message(role: strdup("user"), content: contentPtr)
-            defer { free(UnsafeMutablePointer(mutating: message.role)) }
-
-            var bufSize: Int32 = Int32(userContent.utf8.count * 2 + 64)
-            var buffer = [CChar](repeating: 0, count: Int(bufSize))
-            var n = withUnsafeMutablePointer(to: &message) { msgPtr in
-                llama_chat_apply_template(nil, msgPtr, 1, true, &buffer, bufSize)
-            }
-            guard n > 0 else { return nil } // шаблон не распознан
-
-            if n > bufSize {
-                bufSize = n
-                buffer = [CChar](repeating: 0, count: Int(bufSize))
-                n = withUnsafeMutablePointer(to: &message) { msgPtr in
-                    llama_chat_apply_template(nil, msgPtr, 1, true, &buffer, bufSize)
-                }
-                guard n > 0 else { return nil }
-            }
-            return String(cString: buffer)
-        }
+        // Из metadata GGUF:
+        // <｜hy_begin▁of▁sentence｜><｜hy_User｜>{{ content }}<｜hy_Assistant｜>
+        return "<｜hy_begin▁of▁sentence｜><｜hy_User｜>\(userContent)<｜hy_Assistant｜>"
     }
 
     private func tokenToPiece(_ token: llama_token) -> [CChar] {
