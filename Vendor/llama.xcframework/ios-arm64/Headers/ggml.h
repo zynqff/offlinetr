@@ -427,10 +427,10 @@ extern "C" {
         // GGML_TYPE_IQ4_NL_4_8 = 37,
         // GGML_TYPE_IQ4_NL_8_8 = 38,
         GGML_TYPE_MXFP4   = 39, // MXFP4 (1 block)
-        GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
+        GGML_TYPE_Q2_0C   = 40,
         GGML_TYPE_Q1_0    = 41,
         GGML_TYPE_Q2_0    = 42,
-        GGML_TYPE_STQ1_0  = 43,
+        GGML_TYPE_NVFP4   = 43, // NVFP4 (4 blocks, E4M3 scale)
         GGML_TYPE_COUNT   = 44,
     };
 
@@ -2786,12 +2786,6 @@ extern "C" {
             int                   idx);
 
     GGML_API void ggml_build_forward_expand(
-            struct ggml_cgraph * cgraph,
-            struct ggml_tensor * tensor);
-
-    // add the tensor and its parents to the graph without marking them for compute
-    // the flag is set later, when the tensor is reached from a node that computes
-    GGML_API void ggml_build_forward_order(
             struct ggml_cgraph * cgraph,
             struct ggml_tensor * tensor);
 
