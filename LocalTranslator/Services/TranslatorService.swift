@@ -240,10 +240,9 @@ actor LlamaContext {
 
         var modelParams = llama_model_default_params()
 
-        // Временно оставляем CPU-only режим для диагностики.
-        // Это позволяет исключить влияние Metal/GPU offload
-        // на генерацию HY-MT2/STQ1_0.
-        modelParams.n_gpu_layers = 0
+        // Metal offload включён: все слои уходят на GPU, декодирование
+        // на порядок быстрее, чем чистый CPU-режим.
+        modelParams.n_gpu_layers = 999
 
         llamaLogger.notice(
             "LlamaContext.create: вызываю llama_model_load_from_file (n_gpu_layers=\(modelParams.n_gpu_layers, privacy: .public))"
@@ -405,6 +404,15 @@ actor LlamaContext {
         var output = ""
 
         for _ in 0..<effectiveMaxTokens {
+
+            // Кооперативная отмена: если задача (Task), в рамках которой
+            // выполняется эта генерация, была отменена (пользователь
+            // продолжил печатать и schedulePreview() запустил новую),
+            // немедленно прерываем цикл — иначе актор останется занят
+            // устаревшей генерацией и заблокирует следующий запрос.
+            if Task.isCancelled {
+                throw CancellationError()
+            }
 
             let token = llama_sampler_sample(
                 sampling,
