@@ -90,8 +90,11 @@ workflows:
 
           cp -R "$LLAMA/include/." "$OUT/headers/"
           if [ -d "$LLAMA/ggml/include" ]; then
-            mkdir -p "$OUT/headers/ggml"
-            cp -R "$LLAMA/ggml/include/." "$OUT/headers/ggml/"
+            # ВАЖНО: кладём в ту же плоскую папку Headers/, а не в Headers/ggml/.
+            # llama.h и заголовки ggml используют #include "ggml.h" (без
+            # подпапки) — им нужно, чтобы все .h лежали рядом, в одном
+            # каталоге, как в оригинальном build-xcframework.sh-раскладе.
+            cp -R "$LLAMA/ggml/include/." "$OUT/headers/"
           fi
 
           cat > "$OUT/headers/module.modulemap" <<'EOF'
