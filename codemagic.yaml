@@ -115,6 +115,22 @@ workflows:
           mkdir -p "$ROOT/Vendor"
           cp -R "$OUT/llama.xcframework" "$ROOT/Vendor/llama.xcframework"
 
+          # xcodebuild -create-xcframework иногда сам перегенерирует
+          # module.modulemap для слайса с заголовками и может подменить
+          # наш "плоский" module на "framework module" + "umbrella header".
+          # Поэтому принудительно перезаписываем файл ПОСЛЕ -create-xcframework
+          # и ПОСЛЕ копирования в Vendor/ — это последняя точка перед сборкой
+          # приложения, ничего больше modulemap не трогает.
+          FINAL_MODMAP="$ROOT/Vendor/llama.xcframework/ios-arm64/Headers/module.modulemap"
+          cat > "$FINAL_MODMAP" <<'EOF'
+          module llama {
+              header "llama.h"
+              export *
+          }
+          EOF
+          echo "=== Финальный module.modulemap (после create-xcframework) ==="
+          cat "$FINAL_MODMAP"
+
       - name: Verify Q2_0C Metal source and generated framework
         script: |
           set -euo pipefail
@@ -125,6 +141,14 @@ workflows:
           grep -q 'GGML_TYPE_Q2_0C' "$ROOT/.build/llama.cpp/ggml/src/ggml-metal/ggml-metal-ops.cpp"
           test -f "$XCFW/ios-arm64/libllama.a"
           test -f "$XCFW/ios-arm64/Headers/llama.h"
+
+          echo "=== module.modulemap на этом этапе ==="
+          cat "$XCFW/ios-arm64/Headers/module.modulemap"
+          if grep -q 'framework module' "$XCFW/ios-arm64/Headers/module.modulemap"; then
+            echo "ОШИБКА: module.modulemap снова в форме 'framework module' — что-то его перезаписывает."
+            exit 1
+          fi
+
           echo 'Native Q2_0C Metal source is present and XCFramework was generated.'
 
       - name: Build LocalTranslator.app unsigned
