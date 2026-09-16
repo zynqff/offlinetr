@@ -240,8 +240,11 @@ actor LlamaContext {
 
         var modelParams = llama_model_default_params()
 
-        // Metal offload включён: все слои уходят на GPU, декодирование
-        // на порядок быстрее, чем чистый CPU-режим.
+        // Metal offload включён: Q2_0C теперь имеет реальный Metal-кернел
+        // (см. Scripts/patch_q2_0c_metal.sh, применяется поверх форка
+        // chaxu01/llama.cpp @ 92c448af6). Патч проверен построчно и
+        // применяется чисто, но НЕ обкатан на реальном GPU — первый
+        // запуск тестируйте на устройстве, а не сразу в релиз.
         modelParams.n_gpu_layers = 999
 
         llamaLogger.notice(
