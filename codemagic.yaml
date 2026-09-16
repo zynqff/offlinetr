@@ -95,10 +95,9 @@ workflows:
           fi
 
           cat > "$OUT/headers/module.modulemap" <<'EOF'
-          framework module llama {
-            umbrella header "llama.h"
-            export *
-            module * { export * }
+          module llama {
+              header "llama.h"
+              export *
           }
           EOF
 
