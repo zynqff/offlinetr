@@ -3,40 +3,55 @@ import SwiftUI
 struct OnboardingView: View {
     @AppStorage("onboardingCompleted") private var completed = false
     @State private var page = 0
+    @State private var showPrivacyPolicy = false
 
     private let pages: [OnboardPageData] = [
         .init(
             image: "onboarding-type",
             title: "Печатайте текст",
-            text: "Перевод запускается локально на устройстве. Ваши данные не покидают телефон."
+            text: "Перевод запускается локально на устройстве. Ваши данные не покидают телефон.",
+            isConsent: false
         ),
         .init(
             image: "onboarding-languages",
             title: "Выберите языки",
-            text: "Доступно 33 языка. Выберите исходный и целевой язык."
+            text: "Доступно 33 языка. Выберите исходный и целевой язык.",
+            isConsent: false
         ),
         .init(
             image: "onboarding-translate",
             title: "Перевод по мере ввода",
-            text: "Нажмите «Далее» или Enter, чтобы зафиксировать карточку перевода."
+            text: "Нажмите «Далее» или Enter, чтобы зафиксировать карточку перевода.",
+            isConsent: false
         ),
         .init(
             image: "onboarding-unload",
             title: "Настройте выгрузку",
-            text: "Модель выгружается из памяти в фоне и по таймауту."
+            text: "Модель выгружается из памяти в фоне и по таймауту.",
+            isConsent: false
         ),
         .init(
             image: "onboarding-theme",
             title: "Тема",
-            text: "Выберите светлую, тёмную или системную тему по вашему вкусу."
+            text: "Выберите светлую, тёмную или системную тему по вашему вкусу.",
+            isConsent: false
+        ),
+        .init(
+            image: "onboarding-privacy",
+            title: "Всё готово",
+            text: "",
+            isConsent: true
         )
     ]
+
+    private var isLastPage: Bool { page == pages.count - 1 }
 
     var body: some View {
         VStack(spacing: 0) {
             TabView(selection: $page) {
                 ForEach(pages.indices, id: \.self) { index in
-                    OnboardPage(data: pages[index]).tag(index)
+                    OnboardPage(data: pages[index], showPrivacyPolicy: $showPrivacyPolicy)
+                        .tag(index)
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
@@ -46,13 +61,13 @@ struct OnboardingView: View {
                 .padding(.top, 8)
 
             Button {
-                if page < pages.count - 1 {
-                    withAnimation { page += 1 }
-                } else {
+                if isLastPage {
                     completed = true
+                } else {
+                    withAnimation { page += 1 }
                 }
             } label: {
-                Text(page < pages.count - 1 ? "Далее" : "Начать")
+                Text(isLastPage ? "Начать" : "Далее")
                     .font(.headline)
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
@@ -71,6 +86,9 @@ struct OnboardingView: View {
             .padding(.bottom, 16)
         }
         .background(Color(.systemBackground))
+        .sheet(isPresented: $showPrivacyPolicy) {
+            PrivacyPolicyView()
+        }
     }
 }
 
@@ -78,10 +96,12 @@ private struct OnboardPageData {
     let image: String
     let title: String
     let text: String
+    let isConsent: Bool
 }
 
 private struct OnboardPage: View {
     let data: OnboardPageData
+    @Binding var showPrivacyPolicy: Bool
 
     var body: some View {
         VStack(spacing: 28) {
@@ -110,16 +130,41 @@ private struct OnboardPage: View {
                     .font(.title.bold())
                     .multilineTextAlignment(.center)
 
-                Text(data.text)
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 32)
+                if data.isConsent {
+                    consentText
+                        .font(.body)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
+                } else {
+                    Text(data.text)
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
+                }
             }
 
             Spacer(minLength: 12)
         }
         .padding(.horizontal, 20)
+    }
+
+    /// «Используя наше приложение, вы соглашаетесь с Политикой конфиденциальности»,
+    /// где «Политика конфиденциальности» — кликабельная ссылка, открывающая PrivacyPolicyView.
+    private var consentText: some View {
+        let markdown = "Используя наше приложение, вы соглашаетесь с [Политикой конфиденциальности](onboarding-privacy-policy://open)."
+        let attributed = (try? AttributedString(markdown: markdown)) ?? AttributedString(markdown)
+
+        return Text(attributed)
+            .foregroundStyle(.secondary)
+            .tint(Color(red: 0.49, green: 0.42, blue: 0.93))
+            .environment(\.openURL, OpenURLAction { url in
+                if url.scheme == "onboarding-privacy-policy" {
+                    showPrivacyPolicy = true
+                    return .handled
+                }
+                return .systemAction
+            })
     }
 }
 
