@@ -4,6 +4,15 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LLAMA="$ROOT/.build/llama.cpp"
 REPO="https://github.com/chaxu01/llama.cpp.git"
 COMMIT="92c448af6"
+
+# ВАЖНО: перед rm -rf на .build/llama.cpp явно уходим в $ROOT.
+# Если вызывающий скрипт (например, шаг в codemagic.yaml) уже стоит
+# внутри .build/llama.cpp, rm -rf удаляет текущую директорию шелла,
+# и следующая же команда (git clone) падает с
+# "fatal: Unable to read current working directory" — это баг
+# порядка команд, а не прав доступа/сети.
+cd "$ROOT"
+
 rm -rf "$LLAMA"
 mkdir -p "$ROOT/.build"
 git clone --filter=blob:none "$REPO" "$LLAMA"
