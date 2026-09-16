@@ -72,19 +72,19 @@ workflows:
             exit 1
           }
 
-          OBJECT_DIR="$OUT/objects"
-          rm -rf "$OBJECT_DIR"
-          mkdir -p "$OBJECT_DIR"
-          for lib in "${LIBS[@]}"; do
-            name="$(basename "$lib" .a)"
-            mkdir -p "$OBJECT_DIR/$name"
-            (cd "$OBJECT_DIR/$name" && ar -x "$lib")
-          done
-
+          # ВАЖНО: сливаем архивы через libtool -static напрямую (он умеет
+          # объединять уже готовые .a), а не через ручной ar -x + повторная
+          # упаковка объектников. Раньше .o извлекались по голому имени файла
+          # в общие папки на архив — если у ggml-cpu (или его вариантов)
+          # встречались два .o с одинаковым базовым именем из разных
+          # исходных поддиректорий, один тихо затирал другой, и реализация
+          # quantize_row_* (например, ggml-quants.c.o) терялась из финального
+          # архива, хотя ggml-cpu.c.o, ссылающийся на неё, оставался — отсюда
+          # "symbol(s) not found" на линковке.
+          #
           # ВАЖНО: итоговый файл называется именно libllama.a — так его
           # находит -lllama на шаге сборки самого приложения.
-          find "$OBJECT_DIR" -type f -name '*.o' -print0 |
-            xargs -0 libtool -static -o "$OUT/archive/libllama.a"
+          libtool -static -o "$OUT/archive/libllama.a" "${LIBS[@]}"
 
           test -s "$OUT/archive/libllama.a"
 
