@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct LocalTranslatorApp: App {
+struct LinguaPawApp: App {
     @AppStorage("onboardingCompleted") private var onboardingCompleted = false
     @AppStorage("theme") private var theme = "system"
     @StateObject private var viewModel = TranslatorViewModel()
